@@ -33,7 +33,7 @@ class FakeAlpaca:
     def __init__(self, ts="2026-10-19T10:15:05.0-04:00", is_open=True, equity=100000, last_equity=100000):
         self.ts, self.is_open = ts, is_open
         self.equity, self.last_equity = equity, last_equity
-        self.submitted, self.closed, self.held, self.orders = [], 0, [], []
+        self.submitted, self.closed, self.held, self.orders, self.lists = [], 0, [], [], []
 
     def clock(self):
         return {"timestamp": self.ts, "is_open": self.is_open, "next_open": "2026-10-20T09:30:00-04:00"}
@@ -55,6 +55,17 @@ class FakeAlpaca:
     def submit_bracket(self, order, client_order_id):
         self.submitted.append((order, client_order_id))
         return {"id": "fake-%d" % len(self.submitted)}
+
+    def watchlists(self):
+        return self.lists
+
+    def create_watchlist(self, name, symbols):
+        self.lists.append({"id": "w%d" % len(self.lists), "name": name, "symbols": symbols})
+
+    def update_watchlist(self, watchlist_id, name, symbols):
+        for w in self.lists:
+            if w["id"] == watchlist_id:
+                w.update(name=name, symbols=symbols)
 
     def close_all(self):
         self.closed += 1
@@ -170,6 +181,20 @@ class BotTest(unittest.TestCase):
         b = FakeAlpaca(equity=99800, last_equity=100000)
         self.assertEqual(self.make(b).tick(), "loss-limit")
         self.assertEqual(b.submitted, [])
+
+    def test_watchlist_created_then_updated(self):
+        b = FakeAlpaca()
+        b.lists = [{"id": "other", "name": "Mine", "symbols": ["KO"]}]
+        cfg = copy.deepcopy(self.cfg)
+        cfg["bot"]["symbols"] = ["tsla", "NVDA"]
+        self.make(b, cfg).sync_watchlist()
+        self.assertEqual(b.lists[1]["name"], "Paper-Bot")
+        self.assertEqual(b.lists[1]["symbols"], ["TSLA", "NVDA"])
+        cfg["bot"]["symbols"] = ["AMD"]
+        self.make(b, cfg).sync_watchlist()
+        self.assertEqual(len(b.lists), 2)
+        self.assertEqual(b.lists[1]["symbols"], ["AMD"])
+        self.assertEqual(b.lists[0]["symbols"], ["KO"])
 
     def test_market_closed(self):
         b = FakeAlpaca(is_open=False)

@@ -77,6 +77,15 @@ class Alpaca:
             body["limit_price"] = str(order["limit_price"])
         return self._call("POST", "/v2/orders", body)
 
+    def watchlists(self):
+        return self._call("GET", "/v2/watchlists")
+
+    def create_watchlist(self, name, symbols):
+        return self._call("POST", "/v2/watchlists", {"name": name, "symbols": symbols})
+
+    def update_watchlist(self, watchlist_id, name, symbols):
+        return self._call("PUT", "/v2/watchlists/" + watchlist_id, {"name": name, "symbols": symbols})
+
     def close_all(self):
         """Cancel every open order and flatten every position."""
         return self._call("DELETE", "/v2/positions?cancel_orders=true")
