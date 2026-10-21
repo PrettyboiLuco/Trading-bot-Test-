@@ -45,7 +45,12 @@ class FakeAlpaca:
         return [{"symbol": s, "qty": "8"} for s in self.held]
 
     def open_orders(self):
-        return self.orders
+        return [o for o in self.orders if o["status"] == "new"]
+
+    def orders_since(self, after):
+        return self.orders + [{"id": "fake-%d" % i, "client_order_id": cid, "status": "new", "qty": o["qty"],
+                               "filled_qty": "0", "submitted_at": self.ts}
+                              for i, (o, cid) in enumerate(self.submitted, 1)]
 
     def submit_bracket(self, order, client_order_id):
         self.submitted.append((order, client_order_id))
@@ -78,7 +83,7 @@ class BotTest(unittest.TestCase):
         self.assertEqual((order["symbol"], order["qty"], order["side"]), ("TSLA", "8", "buy"))
         self.assertEqual(order["stop_loss_stop_price"], "358.32")
         self.assertEqual(order["take_profit_limit_price"], "370.04")
-        self.assertEqual(cid, "bot-2026-10-19-TSLA")
+        self.assertEqual(cid, "bot-2026-10-19-TSLA-4688")
         state = bot.read_json(os.path.join(self.dir, bot.STATE))
         self.assertEqual(state["orders"][0]["status"], "placed")
         self.assertEqual(state["orders"][0]["max_loss"], 46.88)
@@ -91,6 +96,38 @@ class BotTest(unittest.TestCase):
         self.assertEqual(bt.tick(), "watching")
         self.assertEqual(len(b.submitted), 1)
 
+    def test_fresh_run_remembers_the_days_trades(self):
+        # GitHub Actions: a new run on a clean machine, same broker
+        b = FakeAlpaca()
+        self.make(b).tick()
+        shutil.rmtree(self.dir)
+        os.makedirs(self.dir)
+        self.assertEqual(self.make(b).tick(), "watching")
+        self.assertEqual(len(b.submitted), 1)
+        cfg = copy.deepcopy(self.cfg)
+        cfg["max_trades_per_day"] = 1
+        self.assertEqual(self.make(b, cfg).tick(), "max-trades")
+
+    def test_cancelled_unfilled_orders_do_not_count(self):
+        b = FakeAlpaca()
+        b.orders = [{"id": "x", "client_order_id": "bot-2026-10-19-AAPL-12000", "status": "canceled",
+                     "qty": "10", "filled_qty": "0", "submitted_at": b.ts}]
+        self.assertEqual(self.make(b).tick(), "traded")
+
+    def test_session_over(self):
+        start = bot.parse_ts("2026-10-19T09:20:00-04:00")
+        open_ = {"timestamp": "2026-10-19T12:00:00.5-04:00", "is_open": True,
+                 "next_open": "2026-10-20T09:30:00-04:00"}
+        self.assertIsNone(bot.session_over(open_, start, 5.8))
+        late = dict(open_, timestamp="2026-10-19T15:09:00-04:00")
+        self.assertIn("time limit", bot.session_over(late, start, 5.8))
+        before_open = {"timestamp": "2026-10-19T08:20:00-05:00", "is_open": False,
+                       "next_open": "2026-10-19T09:30:00-05:00"}
+        self.assertIsNone(bot.session_over(before_open, bot.parse_ts(before_open["timestamp"]), 5.8))
+        after_close = {"timestamp": "2026-10-19T16:01:00-04:00", "is_open": False,
+                       "next_open": "2026-10-20T09:30:00-04:00"}
+        self.assertIn("market closed", bot.session_over(after_close, start, None))
+
     def test_time_machine_filter_skips_weak_setup(self):
         cfg = copy.deepcopy(self.cfg)
         cfg["bot"]["min_avg_r"] = 0.5
@@ -102,11 +139,10 @@ class BotTest(unittest.TestCase):
         self.assertTrue(any("under min_avg_r" in l for l in self.lines))
 
     def test_risk_block_stops_the_order(self):
-        # an earlier trade today already risks $120 of the $150 daily limit
-        bot.write_json(os.path.join(self.dir, bot.STATE), {"orders": [
-            {"date": "2026-10-19", "symbol": "AAPL", "side": "buy", "kind": "entry",
-             "max_loss": 120, "status": "placed"}]})
+        # an earlier run today already risked $120 of the $150 daily limit on AAPL
         b = FakeAlpaca()
+        b.orders = [{"id": "x", "client_order_id": "bot-2026-10-19-AAPL-12000", "status": "filled",
+                     "qty": "10", "filled_qty": "10", "submitted_at": b.ts}]
         self.assertEqual(self.make(b).tick(), "watching")
         self.assertEqual(b.submitted, [])
         self.assertTrue(any("risk BLOCK" in l and "daily" in l for l in self.lines), self.lines)

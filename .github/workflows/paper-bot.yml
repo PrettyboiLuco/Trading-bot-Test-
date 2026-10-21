@@ -1,0 +1,59 @@
+# Runs bot/ against the Alpaca paper account every US trading day.
+# A GitHub job may run at most 6 hours and the market is open 6.5, so the day
+# is split: a morning run, an afternoon run that flattens by 15:55 New York,
+# and a backup run that flattens if the afternoon run did not start. The
+# concurrency group queues them one after the other. Each run exits on its own
+# when the market is closed (weekends, holidays). Times are UTC and cover both
+# US summer time (13:30-20:00 UTC) and winter time (14:30-21:00 UTC).
+name: Paper-Trading-Bot
+
+on:
+  schedule:
+    - cron: "20 13 * * 1-5"
+    - cron: "7 19 * * 1-5"
+    - cron: "40 20 * * 1-5"
+  workflow_dispatch:
+
+concurrency:
+  group: paper-bot
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run the bot
+        env:
+          APCA_API_KEY_ID: ${{ secrets.APCA_API_KEY_ID }}
+          APCA_API_SECRET_KEY: ${{ secrets.APCA_API_SECRET_KEY }}
+        run: |
+          if [ -z "$APCA_API_KEY_ID" ] || [ -z "$APCA_API_SECRET_KEY" ]; then
+            echo "::error::Add APCA_API_KEY_ID and APCA_API_SECRET_KEY under Settings > Secrets and variables > Actions"
+            exit 1
+          fi
+          python bot/bot.py --session --max-hours 5.75
+
+      - name: Summary
+        if: always()
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -n 80 bot/trader/bot.log >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "no log" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bot-${{ github.run_id }}
+          path: bot/trader/
+          retention-days: 30
+          if-no-files-found: ignore

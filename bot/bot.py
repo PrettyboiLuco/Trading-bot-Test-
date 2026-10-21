@@ -20,6 +20,7 @@ import argparse
 import datetime
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -70,6 +71,23 @@ def ny_clock(clock):
     return ts[:10], ts[11:16]
 
 
+def parse_ts(text):
+    """Alpaca ISO time, possibly with nanoseconds, -> aware datetime."""
+    text = re.sub(r"\.\d+", "", text).replace("Z", "+00:00")
+    return datetime.datetime.fromisoformat(text)
+
+
+def client_id(day, sym, max_loss):
+    """bot-2026-10-19-TSLA-4688: the day, the symbol and the max loss in cents,
+    so a fresh run can rebuild the day's risk from the broker alone."""
+    return "bot-%s-%s-%d" % (day, sym, round(float(max_loss or 0) * 100))
+
+
+def parse_client_id(cid):
+    m = re.match(r"^bot-(\d{4}-\d{2}-\d{2})-(.+)-(\d+)$", cid or "")
+    return (m.group(1), m.group(2), int(m.group(3)) / 100.0) if m else None
+
+
 class Bot:
     def __init__(self, broker, cfg, workdir=HERE, tool_args=None, log=print):
         self.broker = broker
@@ -113,6 +131,22 @@ class Bot:
         self.scan_hits = []
         self.log("new session %s" % day)
 
+    def sync_orders(self, clock):
+        """Rebuild today's placed entries from the broker, so each GitHub
+        Actions run (a fresh machine) knows what earlier runs did."""
+        start = "%sT00:00:00%s" % (self.day, clock["timestamp"][-6:])
+        recs = []
+        for o in self.broker.orders_since(start) or []:
+            parsed = parse_client_id(o.get("client_order_id"))
+            if not parsed or parsed[0] != self.day:
+                continue
+            if o.get("status") in ("canceled", "rejected", "expired") and float(o.get("filled_qty") or 0) == 0:
+                continue
+            recs.append({"at": o.get("submitted_at"), "date": self.day, "symbol": parsed[1], "side": "buy",
+                         "qty": o.get("qty"), "kind": "entry", "max_loss": parsed[2], "status": "placed",
+                         "paper": True, "broker": "alpaca", "by": "bot", "broker_order_id": o.get("id")})
+        write_json(self.path(STATE), {"orders": recs})
+
     def placed_today(self):
         state = read_json(self.path(STATE), {}) or {}
         return [r for r in state.get("orders", []) if r.get("date") == self.day and r.get("status") == "placed"]
@@ -143,12 +177,14 @@ class Bot:
 
     def tick(self):
         clock = self.broker.clock()
+        self.last_clock = clock
         if not clock.get("is_open"):
             self.log("market closed, next open %s" % clock.get("next_open"))
             return "closed"
         day, hm = ny_clock(clock)
         if day != self.day:
             self.new_day(day)
+            self.sync_orders(clock)
         if hm >= self.cfg.get("flat_by", "15:55"):
             if not self.flattened:
                 self.broker.close_all()
@@ -237,17 +273,32 @@ class Bot:
             self.skip(sym, "risk BLOCK: %s" % ("; ".join(reasons) or err))
             return False
 
-        resp = self.broker.submit_bracket(order, "bot-%s-%s" % (self.day, sym))
+        resp = self.broker.submit_bracket(order, client_id(self.day, sym, order.get("plan", {}).get("max_loss")))
         self.record(order, resp)
         self.log("%s BUY %s (paper): stop %s, target %s. %s"
                  % (sym, order["qty"], order["stop_loss_stop_price"], order["take_profit_limit_price"], order["why"]))
         return True
 
 
+def session_over(clock, started, max_hours):
+    """--session (GitHub Actions): stop at the time limit, or when the market
+    is closed and does not open within two hours (after the close, weekends,
+    holidays). Returns the reason, or None to keep going."""
+    now = parse_ts(clock["timestamp"])
+    if max_hours and (now - started).total_seconds() >= max_hours * 3600:
+        return "time limit of %.1f hours reached" % max_hours
+    if not clock.get("is_open") and (parse_ts(clock["next_open"]) - now).total_seconds() > 2 * 3600:
+        return "market closed, next open %s" % clock["next_open"]
+    return None
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Paper-trading bot on the day-trader-skill tools.")
     ap.add_argument("--config", default=os.path.join(HERE, "config.json"))
     ap.add_argument("--once", action="store_true", help="run one tick and exit")
+    ap.add_argument("--session", action="store_true",
+                    help="exit when the market is closed for more than two hours (for GitHub Actions)")
+    ap.add_argument("--max-hours", type=float, help="exit after this many hours")
     a = ap.parse_args(argv)
     from alpaca import Alpaca, AlpacaError
 
@@ -269,6 +320,7 @@ def main(argv=None):
     poll = float(cfg.get("bot", {}).get("poll_seconds", 60))
     log("bot started (paper), watching %s%s" % (", ".join(cfg.get("bot", {}).get("symbols", [])) or "-",
                                                 " + scanner" if cfg.get("bot", {}).get("scanner") else ""))
+    started = None
     try:
         while True:
             try:
@@ -276,9 +328,19 @@ def main(argv=None):
             except AlpacaError as e:
                 log("broker error: %s" % e)
                 result = "error"
+            except Exception as e:  # keep running: a crash would leave positions open past flat_by
+                log("error: %r" % e)
+                result = "error"
             if a.once:
                 return 0
-            time.sleep(300 if result == "closed" else poll)
+            clock = getattr(bot, "last_clock", None)
+            if clock:
+                started = started or parse_ts(clock["timestamp"])
+                why = session_over(clock, started, a.max_hours) if (a.session or a.max_hours) else None
+                if why:
+                    log("exiting: %s" % why)
+                    return 0
+            time.sleep(60 if a.session or result != "closed" else 300)
     except KeyboardInterrupt:
         log("stopped")
         return 0

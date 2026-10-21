@@ -56,6 +56,10 @@ class Alpaca:
     def open_orders(self):
         return self._call("GET", "/v2/orders?status=open&nested=true&limit=500")
 
+    def orders_since(self, after):
+        """Every order (any status) submitted after the ISO time `after`."""
+        return self._call("GET", "/v2/orders?status=all&limit=500&direction=asc&after=" + after)
+
     def submit_bracket(self, order, client_order_id):
         """order: one entry from trader/orders.json (trader-budget's shape)."""
         body = {

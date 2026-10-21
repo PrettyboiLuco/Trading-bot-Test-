@@ -37,7 +37,25 @@ erreicht ist oder die maximale Zahl Trades pro Tag erreicht ist.
 4. Optional eigene Einstellungen: `bot/config.example.json` nach
    `bot/config.json` kopieren und anpassen (wird nicht committet).
 
-## Starten
+## Automatisch auf GitHub (empfohlen)
+
+Der Workflow `.github/workflows/paper-bot.yml` startet den Bot an jedem
+Werktag von selbst; dein PC kann aus sein.
+
+1. Im Repo auf GitHub: **Settings → Secrets and variables → Actions →
+   New repository secret**, zweimal:
+   - Name `APCA_API_KEY_ID`, Wert: dein Paper-API-Key
+   - Name `APCA_API_SECRET_KEY`, Wert: dein Paper-Secret
+2. Fertig. Zum Ausprobieren: **Actions → Paper-Trading-Bot → Run workflow**.
+   Außerhalb der Börsenzeit beendet er sich sofort mit „market closed“.
+
+Was er gemacht hat: **Actions** → einen Lauf anklicken. Die Zusammenfassung
+zeigt das Protokoll, unten unter *Artifacts* liegen alle Dateien des Laufs.
+Deine Trades siehst du außerdem direkt im Alpaca-Dashboard (Paper).
+
+Einstellungen änderst du in `bot/config.example.json` (das liest GitHub).
+
+## Auf dem eigenen PC starten
 
 ```bash
 python3 bot/bot.py           # läuft bis Strg+C
@@ -46,7 +64,8 @@ python3 bot/bot.py --once    # ein einziger Durchlauf
 
 Der Rechner muss während der Börsenzeit an sein (15:30–22:00 Uhr deutscher
 Zeit). Alles Protokoll steht in `bot/trader/bot.log`, die Zwischenergebnisse
-der Tools in `bot/trader/`.
+der Tools in `bot/trader/`. Lokal kannst du statt `config.example.json` eine
+eigene `bot/config.json` anlegen (wird nicht committet).
 
 ## Einstellungen (`config.json`)
 
