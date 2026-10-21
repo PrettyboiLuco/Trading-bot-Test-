@@ -173,6 +173,18 @@ class Bot:
         pnl = float(acct.get("equity", 0)) - float(acct.get("last_equity", acct.get("equity", 0)))
         return pnl, {p["symbol"] for p in positions}
 
+    def sync_watchlist(self, name="Paper-Bot"):
+        """Keep a watchlist in the Alpaca dashboard with the bot's symbols."""
+        syms = [s.upper() for s in self.opts.get("symbols", [])]
+        if not syms:
+            return
+        existing = [w for w in (self.broker.watchlists() or []) if w.get("name") == name]
+        if existing:
+            self.broker.update_watchlist(existing[0]["id"], name, syms)
+        else:
+            self.broker.create_watchlist(name, syms)
+        self.log("Alpaca watchlist %s: %s" % (name, ", ".join(syms)))
+
     # ---------------------------------------------------------------- the tick
 
     def tick(self):
@@ -317,6 +329,10 @@ def main(argv=None):
     except AlpacaError as e:
         print("bot.py: %s" % e, file=sys.stderr)
         return 1
+    try:
+        bot.sync_watchlist()
+    except AlpacaError as e:
+        log("watchlist not updated: %s" % e)
     poll = float(cfg.get("bot", {}).get("poll_seconds", 60))
     log("bot started (paper), watching %s%s" % (", ".join(cfg.get("bot", {}).get("symbols", [])) or "-",
                                                 " + scanner" if cfg.get("bot", {}).get("scanner") else ""))
