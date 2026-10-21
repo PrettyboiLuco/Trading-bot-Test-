@@ -196,6 +196,12 @@ class BotTest(unittest.TestCase):
         self.assertEqual(b.lists[1]["symbols"], ["AMD"])
         self.assertEqual(b.lists[0]["symbols"], ["KO"])
 
+    def test_selftest_offline(self):
+        b = FakeAlpaca()
+        self.assertEqual(self.make(b).selftest(), 0)
+        self.assertTrue(any("selftest time machine TSLA: ok" in l for l in self.lines), self.lines)
+        self.assertEqual(b.submitted, [])
+
     def test_market_closed(self):
         b = FakeAlpaca(is_open=False)
         self.assertEqual(self.make(b).tick(), "closed")
