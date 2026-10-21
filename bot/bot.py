@@ -185,6 +185,37 @@ class Bot:
             self.broker.create_watchlist(name, syms)
         self.log("Alpaca watchlist %s: %s" % (name, ", ".join(syms)))
 
+    def selftest(self):
+        """Check every outside service the trading day needs, without trading:
+        the Alpaca account and Yahoo's bars for each symbol, plus one Time
+        Machine replay. Returns the number of failures."""
+        failed = 0
+        clock, acct = self.broker.clock(), self.broker.account()
+        self.log("selftest Alpaca: ok, equity %s, market %s" % (acct.get("equity"), "open" if clock.get("is_open") else "closed"))
+        tm_done = False
+        for sym in [s.upper() for s in self.opts.get("symbols", [])]:
+            rc, entry, err = self.tool_json("entry", "check", sym, "--json")
+            if entry is None:
+                failed += 1
+                self.log("selftest Yahoo %s: FAILED %s" % (sym, err))
+                continue
+            last = (entry.get("last") or {}).get("close")
+            self.log("selftest Yahoo %s: ok, %s %s, last close %s" % (sym, entry.get("date"), entry.get("status"), last))
+            if not tm_done and last:
+                tm_done = True
+                rc, tm, err = self.tool_json(
+                    "timemachine", "run", "--symbol", sym, "--date", entry["date"], "--entry-time", "10:15 AM",
+                    "--entry", "%.2f" % last, "--stop", "%.2f" % (last * 0.99), "--target", "%.2f" % (last * 1.01),
+                    "--replays", "200", "--json")
+                if tm is None:
+                    failed += 1
+                    self.log("selftest time machine %s: FAILED %s" % (sym, err))
+                else:
+                    self.log("selftest time machine %s: ok, %d past sessions, %s"
+                             % (sym, (tm.get("history") or {}).get("sessions", 0), tm.get("verdict")))
+        self.log("selftest: %s" % ("all ok" if not failed else "%d FAILED" % failed))
+        return failed
+
     # ---------------------------------------------------------------- the tick
 
     def tick(self):
@@ -311,6 +342,7 @@ def main(argv=None):
     ap.add_argument("--session", action="store_true",
                     help="exit when the market is closed for more than two hours (for GitHub Actions)")
     ap.add_argument("--max-hours", type=float, help="exit after this many hours")
+    ap.add_argument("--selftest", action="store_true", help="check Alpaca and Yahoo, update the watchlist, no trading")
     a = ap.parse_args(argv)
     from alpaca import Alpaca, AlpacaError
 
@@ -333,6 +365,12 @@ def main(argv=None):
         bot.sync_watchlist()
     except AlpacaError as e:
         log("watchlist not updated: %s" % e)
+    if a.selftest:
+        try:
+            return 1 if bot.selftest() else 0
+        except AlpacaError as e:
+            log("selftest Alpaca: FAILED %s" % e)
+            return 1
     poll = float(cfg.get("bot", {}).get("poll_seconds", 60))
     log("bot started (paper), watching %s%s" % (", ".join(cfg.get("bot", {}).get("symbols", [])) or "-",
                                                 " + scanner" if cfg.get("bot", {}).get("scanner") else ""))

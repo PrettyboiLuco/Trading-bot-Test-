@@ -13,6 +13,11 @@ on:
     - cron: "7 19 * * 1-5"
     - cron: "40 20 * * 1-5"
   workflow_dispatch:
+    inputs:
+      selftest:
+        description: "Only check Alpaca and Yahoo, no trading"
+        type: boolean
+        default: false
 
 concurrency:
   group: paper-bot
@@ -41,7 +46,11 @@ jobs:
             echo "::error::Add APCA_API_KEY_ID and APCA_API_SECRET_KEY under Settings > Secrets and variables > Actions"
             exit 1
           fi
-          python bot/bot.py --session --max-hours 5.75
+          if [ "${{ inputs.selftest }}" = "true" ]; then
+            python bot/bot.py --selftest
+          else
+            python bot/bot.py --session --max-hours 5.75
+          fi
 
       - name: Summary
         if: always()
