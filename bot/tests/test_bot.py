@@ -33,6 +33,7 @@ class FakeAlpaca:
     def __init__(self, ts="2026-10-19T10:15:05.0-04:00", is_open=True, equity=100000, last_equity=100000):
         self.ts, self.is_open = ts, is_open
         self.equity, self.last_equity = equity, last_equity
+        self.value = 2913.44
         self.submitted, self.closed, self.held, self.orders, self.lists = [], 0, [], [], []
 
     def clock(self):
@@ -42,7 +43,7 @@ class FakeAlpaca:
         return {"cash": "100000", "equity": str(self.equity), "last_equity": str(self.last_equity)}
 
     def positions(self):
-        return [{"symbol": s, "qty": "8"} for s in self.held]
+        return [{"symbol": s, "qty": "8", "market_value": str(self.value)} for s in self.held]
 
     def open_orders(self):
         return [o for o in self.orders if o["status"] == "new"]
@@ -201,6 +202,38 @@ class BotTest(unittest.TestCase):
         self.assertEqual(self.make(b).selftest(), 0)
         self.assertTrue(any("selftest time machine TSLA: ok" in l for l in self.lines), self.lines)
         self.assertEqual(b.submitted, [])
+
+    def test_budget_caps_everything_held(self):
+        # 22.10.2026: TSLA ($3,470) then AMD ($3,690) on a $5,000 budget.
+        # With $4,000 already held only $1,000 of the budget is left.
+        b = FakeAlpaca()
+        b.held, b.value = ["AMD"], 4000
+        bt = self.make(b)
+        bt.sync_account()
+        self.assertEqual(bot.read_json(os.path.join(self.dir, "trader/portfolio.json"))["cash"], 1000)
+        self.assertEqual(bt.tick(), "traded")
+        order = b.submitted[0][0]
+        self.assertLessEqual(int(order["qty"]) * 364.18, 1000)
+
+    def test_budget_used_up_means_no_order(self):
+        b = FakeAlpaca()
+        b.held, b.value = ["AMD"], 5200
+        self.assertEqual(self.make(b).tick(), "watching")
+        self.assertEqual(b.submitted, [])
+
+    def test_closed_logged_once(self):
+        bt = self.make(FakeAlpaca(is_open=False))
+        bt.tick()
+        bt.tick()
+        self.assertEqual(len([l for l in self.lines if "market closed" in l]), 1)
+
+    def test_chained_run_waits_through_the_night(self):
+        start = bot.parse_ts("2026-10-22T16:01:00-04:00")
+        night = {"timestamp": "2026-10-22T20:00:00-04:00", "is_open": False,
+                 "next_open": "2026-10-23T09:30:00-04:00"}
+        self.assertIsNone(bot.session_over(night, start, 5.75, exit_when_closed=False))
+        late = dict(night, timestamp="2026-10-22T21:47:00-04:00")
+        self.assertIn("time limit", bot.session_over(late, start, 5.75, exit_when_closed=False))
 
     def test_market_closed(self):
         b = FakeAlpaca(is_open=False)

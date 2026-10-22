@@ -166,8 +166,14 @@ class Bot:
     def sync_account(self):
         acct = self.broker.account()
         positions = self.broker.positions() or []
+        cash = float(acct["cash"])
+        if self.cfg.get("budget"):
+            # the budget caps what the bot holds in total: the paper account
+            # has far more cash than the bot is meant to use
+            held = sum(abs(float(p.get("market_value") or 0)) for p in positions)
+            cash = min(cash, max(0.0, float(self.cfg["budget"]) - held))
         write_json(self.path("trader/portfolio.json"), {
-            "cash": float(acct["cash"]),
+            "cash": cash,
             "positions": [{"symbol": p["symbol"], "shares": float(p["qty"])} for p in positions],
         })
         pnl = float(acct.get("equity", 0)) - float(acct.get("last_equity", acct.get("equity", 0)))
@@ -222,8 +228,11 @@ class Bot:
         clock = self.broker.clock()
         self.last_clock = clock
         if not clock.get("is_open"):
-            self.log("market closed, next open %s" % clock.get("next_open"))
+            if getattr(self, "last_result", None) != "closed":
+                self.log("market closed, next open %s" % clock.get("next_open"))
+            self.last_result = "closed"
             return "closed"
+        self.last_result = "open"
         day, hm = ny_clock(clock)
         if day != self.day:
             self.new_day(day)
@@ -323,14 +332,14 @@ class Bot:
         return True
 
 
-def session_over(clock, started, max_hours):
-    """--session (GitHub Actions): stop at the time limit, or when the market
-    is closed and does not open within two hours (after the close, weekends,
-    holidays). Returns the reason, or None to keep going."""
+def session_over(clock, started, max_hours, exit_when_closed=True):
+    """Stop at the time limit, or (--session) when the market is closed and
+    does not open within two hours (after the close, weekends, holidays).
+    Returns the reason, or None to keep going."""
     now = parse_ts(clock["timestamp"])
     if max_hours and (now - started).total_seconds() >= max_hours * 3600:
         return "time limit of %.1f hours reached" % max_hours
-    if not clock.get("is_open") and (parse_ts(clock["next_open"]) - now).total_seconds() > 2 * 3600:
+    if exit_when_closed and not clock.get("is_open") and (parse_ts(clock["next_open"]) - now).total_seconds() > 2 * 3600:
         return "market closed, next open %s" % clock["next_open"]
     return None
 
@@ -390,11 +399,11 @@ def main(argv=None):
             clock = getattr(bot, "last_clock", None)
             if clock:
                 started = started or parse_ts(clock["timestamp"])
-                why = session_over(clock, started, a.max_hours) if (a.session or a.max_hours) else None
+                why = session_over(clock, started, a.max_hours, a.session) if (a.session or a.max_hours) else None
                 if why:
                     log("exiting: %s" % why)
                     return 0
-            time.sleep(60 if a.session or result != "closed" else 300)
+            time.sleep(300 if result == "closed" and not a.session else 60)
     except KeyboardInterrupt:
         log("stopped")
         return 0

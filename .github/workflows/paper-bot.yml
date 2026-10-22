@@ -1,17 +1,18 @@
-# Runs bot/ against the Alpaca paper account every US trading day.
-# A GitHub job may run at most 6 hours and the market is open 6.5, so the day
-# is split: a morning run, an afternoon run that flattens by 15:55 New York,
-# and a backup run that flattens if the afternoon run did not start. The
-# concurrency group queues them one after the other. Each run exits on its own
-# when the market is closed (weekends, holidays). Times are UTC and cover both
-# US summer time (13:30-20:00 UTC) and winter time (14:30-21:00 UTC).
+# Runs bot/ against the Alpaca paper account around the clock.
+# A GitHub job may run at most 6 hours, so each run stops after 5.75 hours
+# and starts the next one itself (a chain), waiting through nights and
+# weekends. GitHub's own schedule fired hours late on the first day, so the
+# crons below are only a fallback that restarts the chain if it ever breaks
+# (every 3 hours, and hourly while the US market is open).
+# The concurrency group never lets two runs trade at once.
+# To pause the bot: Settings > Secrets and variables > Actions > Variables,
+# add BOT_PAUSED = true (delete it to resume, then start a run by hand).
 name: Paper-Trading-Bot
 
 on:
   schedule:
-    - cron: "20 13 * * 1-5"
-    - cron: "7 19 * * 1-5"
-    - cron: "40 20 * * 1-5"
+    - cron: "11 */3 * * *"
+    - cron: "41 13-20 * * 1-5"
   workflow_dispatch:
     inputs:
       selftest:
@@ -25,12 +26,16 @@ concurrency:
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
   trade:
+    if: vars.BOT_PAUSED != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 355
     steps:
+      - run: echo "STARTED=$(date +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
@@ -49,7 +54,7 @@ jobs:
           if [ "${{ inputs.selftest }}" = "true" ]; then
             python bot/bot.py --selftest
           else
-            python bot/bot.py --session --max-hours 5.75
+            python bot/bot.py --max-hours 5.75
           fi
 
       - name: Summary
@@ -66,3 +71,16 @@ jobs:
           path: bot/trader/
           retention-days: 30
           if-no-files-found: ignore
+
+      # Start the next run. Skipped for a selftest, a cancelled run, or a run
+      # that ended within 20 minutes (a crash loop waits for the cron instead).
+      - name: Start the next run
+        if: ${{ !cancelled() && inputs.selftest != true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ $(( $(date +%s) - STARTED )) -lt 1200 ]; then
+            echo "::warning::Run ended within 20 minutes; not chaining. The cron restarts the bot."
+            exit 0
+          fi
+          gh workflow run paper-bot.yml --ref "${{ github.ref_name }}"
