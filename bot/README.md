@@ -39,8 +39,16 @@ erreicht ist oder die maximale Zahl Trades pro Tag erreicht ist.
 
 ## Automatisch auf GitHub (empfohlen)
 
-Der Workflow `.github/workflows/paper-bot.yml` startet den Bot an jedem
-Werktag von selbst; dein PC kann aus sein.
+Der Workflow `.github/workflows/paper-bot.yml` hält den Bot rund um die Uhr
+am Laufen; dein PC kann aus sein. Ein Lauf darf bei GitHub höchstens 6 Stunden
+dauern, deshalb startet jeder Lauf nach 5¾ Stunden selbst den nächsten (eine
+Kette). Nachts und am Wochenende wartet er nur. GitHubs Zeitplan dient nur als
+Reserve, falls die Kette einmal reißt (er kam am ersten Tag Stunden zu spät).
+
+**Bot anhalten:** Settings → Secrets and variables → Actions → Reiter
+**Variables** → New repository variable, Name `BOT_PAUSED`, Wert `true`.
+Zum Fortsetzen die Variable löschen und unter Actions einmal „Run workflow“
+starten.
 
 1. Im Repo auf GitHub: **Settings → Secrets and variables → Actions →
    New repository secret**, zweimal:
@@ -71,7 +79,7 @@ eigene `bot/config.json` anlegen (wird nicht committet).
 
 | Feld | Standard | Bedeutung |
 | --- | --- | --- |
-| `budget` | 5000 | So viel Geld darf der Bot einsetzen, auch wenn das Papierkonto mehr hat |
+| `budget` | 5000 | So viel Geld darf der Bot insgesamt in Aktien halten, auch wenn das Papierkonto mehr hat |
 | `max_loss_per_trade_usd` | 50 | Maximaler Verlust pro Trade, wenn der Stop greift |
 | `max_daily_loss_usd` | 150 | Danach keine neuen Trades an diesem Tag |
 | `max_trades_per_day` | 3 | Maximal so viele Käufe pro Tag |
