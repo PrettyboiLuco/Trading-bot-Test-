@@ -87,7 +87,8 @@ eigene `bot/config.json` anlegen (wird nicht committet).
 | `flat_by` | 15:55 | Ab dann wird alles geschlossen |
 | `bot.symbols` | TSLA, NVDA, … | Aktien, die beobachtet werden |
 | `bot.scanner` | false | `true`: zusätzlich alle ~5.900 US-Aktien nach Ausbrüchen scannen (langsam) |
-| `bot.target` | 1R | Kursziel: 1R = gleich weit wie der Stop, 2R = doppelt so weit |
+| `bot.take_profit_usd` | 50 | Jeder Trade wird bei so viel Dollar Gewinn geschlossen (Take-Profit). `null` = stattdessen `bot.target` benutzen |
+| `bot.target` | 1R | Nur ohne `take_profit_usd`: Kursziel, 1R = gleich weit wie der Stop, 2R = doppelt so weit |
 | `bot.stop` | or-mid | Stop in der Mitte der Eröffnungsspanne (`or-low`, `pct:1`, `atr:1.5` gehen auch) |
 | `bot.min_avg_r` | 0.0 | Mindest-Erwartungswert aus der Simulation; höher = wählerischer |
 
