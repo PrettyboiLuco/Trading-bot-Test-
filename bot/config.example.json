@@ -28,6 +28,7 @@
     "scan_max": 10,
     "stop": "or-mid",
     "target": "1R",
+    "take_profit_usd": 50,
     "timemachine": true,
     "replays": 2000,
     "min_avg_r": 0.0,

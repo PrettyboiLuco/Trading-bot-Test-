@@ -94,11 +94,41 @@ class BotTest(unittest.TestCase):
         order, cid = b.submitted[0]
         self.assertEqual((order["symbol"], order["qty"], order["side"]), ("TSLA", "8", "buy"))
         self.assertEqual(order["stop_loss_stop_price"], "358.32")
-        self.assertEqual(order["take_profit_limit_price"], "370.04")
+        # take_profit_usd 50: 8 shares x (370.43 - 364.18) = $50.00
+        self.assertEqual(order["take_profit_limit_price"], "370.43")
+        # the Time Machine replayed the trade with that target
+        tm = bot.read_json(os.path.join(self.dir, "trader/timemachine.json"))
+        self.assertEqual(tm["plan"]["target"], 370.43)
         self.assertEqual(cid, "bot-2026-10-19-TSLA-4688")
         state = bot.read_json(os.path.join(self.dir, bot.STATE))
         self.assertEqual(state["orders"][0]["status"], "placed")
         self.assertEqual(state["orders"][0]["max_loss"], 46.88)
+
+    def test_without_take_profit_usd_target_is_1r(self):
+        cfg = copy.deepcopy(self.cfg)
+        cfg["bot"]["take_profit_usd"] = None
+        b = FakeAlpaca()
+        self.make(b, cfg).tick()
+        self.assertEqual(b.submitted[0][0]["take_profit_limit_price"], "370.04")
+
+    def test_take_profit_is_at_least_the_dollar_amount(self):
+        cfg = copy.deepcopy(self.cfg)
+        cfg["bot"]["take_profit_usd"] = 75
+        b = FakeAlpaca()
+        self.make(b, cfg).tick()
+        order = b.submitted[0][0]
+        profit = int(order["qty"]) * (float(order["take_profit_limit_price"]) - 364.18)
+        self.assertGreaterEqual(round(profit, 2), 75)
+        self.assertLess(profit, 75 + int(order["qty"]) * 0.01 + 1e-9)
+
+    def test_take_profit_under_the_risk_is_refused(self):
+        # $30 against $46.88 at risk is reward:risk 0.64, under min_reward_risk 1
+        cfg = copy.deepcopy(self.cfg)
+        cfg["bot"]["take_profit_usd"] = 30
+        b = FakeAlpaca()
+        self.assertEqual(self.make(b, cfg).tick(), "watching")
+        self.assertEqual(b.submitted, [])
+        self.assertTrue(any("reward:risk 0.64" in l for l in self.lines), self.lines)
 
     def test_second_tick_does_not_buy_again(self):
         b = FakeAlpaca()

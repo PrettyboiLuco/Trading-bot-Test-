@@ -19,6 +19,7 @@ the broker. It never trades a live account: see alpaca.py.
 import argparse
 import datetime
 import json
+import math
 import os
 import re
 import subprocess
@@ -299,6 +300,24 @@ class Bot:
         if rc != 0:
             self.skip(sym, "no plan: %s" % err)
             return False
+
+        if o.get("take_profit_usd"):
+            # a fixed dollar take-profit per trade: size first (the shares
+            # depend on the stop, not the target), then move the target so
+            # those shares make take_profit_usd, before the Time Machine
+            rc, sized, err = self.tool_json("budget", "--json")
+            if not sized or not sized.get("orders"):
+                why = ((sized or {}).get("sizing") or {}).get("refusal") or err
+                self.skip(sym, "no order: %s" % why)
+                return False
+            qty = int(sized["orders"][0]["qty"])
+            entry_px = float(read_json(self.path("trader/plan.json"), {})["entry"])
+            target = math.ceil((entry_px + float(o["take_profit_usd"]) / qty) * 100) / 100
+            rc, _, err = self.tool("exit", "plan", "--stop", o.get("stop", "or-mid"),
+                                   "--target", "price:%.2f" % target, "--write")
+            if rc != 0:
+                self.skip(sym, "no plan for the $%s target: %s" % (o["take_profit_usd"], err))
+                return False
 
         if o.get("timemachine", True):
             rc, tm, err = self.tool_json("timemachine", "run", "--replays", str(o.get("replays", 2000)), "--json", "--write")
