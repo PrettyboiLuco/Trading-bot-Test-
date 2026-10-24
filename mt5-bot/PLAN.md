@@ -46,8 +46,15 @@ in der der Bot arbeitet.
 - Gehandelt wird realistisch: **Kauf zum Ask, Verkauf zum Bid**; ein Long-Stop
   löst am Bid aus, ein Short-Stop am Ask.
 - 15-Minuten-Kerzen (bzw. 5/30/60 im Sweep) baut Rust aus 1-Minuten-Kerzen,
-  ausgerichtet an der Broker-Serverzeit (Backtest: Dukascopy-UTC auf die
-  Serverzeit des Brokers umgerechnet).
+  ausgerichtet an der Broker-Serverzeit. Backtest: Dukascopy-UTC wird
+  umgerechnet; bis dein Broker feststeht, mit der üblichen Forex-Serverzeit
+  (UTC+2, im US-Sommer UTC+3 – der Handelstag endet um 17:00 New York).
+- Eine Kerze gilt als geschlossen, sobald der erste Kurs der nächsten Kerze
+  eintrifft (live) bzw. die nächste Kerze beginnt (Backtest). Signal und
+  Einstieg passieren damit im selben Moment: zur Eröffnung der nächsten Kerze.
+- **Pause** = Zeitraum ohne Handel laut Broker (live) bzw. Datenlücke von
+  mindestens 30 Minuten (Backtest). Kerzen ohne 1-Minuten-Daten entstehen
+  nicht; sie werden nicht aufgefüllt.
 
 ### 3.2 Indikatoren
 - **EMA(n)** auf dem Schlusskurs, Glättung 2/(n+1), Start mit dem Durchschnitt
@@ -56,6 +63,9 @@ in der der Bot arbeitet.
   typischer Preis = (Hoch + Tief + Schluss) / 3.
   - Wochen-VWAP: Neustart mit der ersten Kerze der Handelswoche
   - Tages-VWAP: Neustart mit der ersten Kerze nach der täglichen Pause
+  - Ist das Volumen seit dem Startpunkt 0 (z. B. fehlende Daten in alten
+    Jahren), gibt es keinen VWAP und damit kein Signal. Wie viele Jahre
+    betroffen sind, zeigt die Datenprüfung in Phase 0.
   - Volumen: Backtest Dukascopy-Volumen, live MT5-Tick-Volumen.
     **V:** zusätzlich „Anzahl Preisänderungen“ als Volumen; nur wenn beide
     ähnlich abschneiden, gilt der Backtest auch für live.
@@ -75,17 +85,28 @@ in der der Bot arbeitet.
 - Ein Signal, das nicht sofort zu einem Einstieg führt (Filter, offene
   Position), **verfällt**. Es wird später nicht nachgeholt.
 
-### 3.4 Ablauf bei jedem Kerzenschluss (feste Reihenfolge)
+### 3.4 Ablauf
+
+**Jede Minute (unabhängig vom Zeitrahmen):**
+- Wochenende, Variante „schließen“: ab Freitag 15 Min vor Handelsschluss
+  offene Position schließen. (Bei 60-Minuten-Kerzen läge der Kerzenschluss
+  sonst bis zu einer Stunde daneben.)
+- Wächter: kommen keine Kurse oder antwortet die Brücke nicht → Warnung,
+  keine neuen Einstiege. Eine offene Position bleibt geschützt, weil Stop und
+  Ziel beim Broker liegen, nicht im Bot.
+
+**Bei jedem Kerzenschluss (feste Reihenfolge):**
 1. **Abgleich mit MT5:** Ist die Position noch offen? (Stop/Ziel löst MT5
    zwischen den Kerzen selbst aus.) Kontostand, Tagesergebnis aktualisieren.
-2. **Wochenende:** Freitag 15 Min vor Handelsschluss und Variante „schließen“
-   → offene Position schließen, Ende.
-3. **Tageslimit prüfen** (siehe 3.8).
+2. **Tageslimit prüfen** (siehe 3.8).
+3. Ist die Position durch die Wochenend-Regel schon geschlossen und ist
+   Freitag nach dieser Uhrzeit: nichts weiter tun.
 4. **Indikatoren** mit der geschlossenen Kerze aktualisieren, Signal prüfen.
 5. **Gegensignal** bei offener Position (**V**): 1 schließen und drehen ·
    2 nur schließen · 3 ignorieren. Schließen ist immer erlaubt, auch nach
    erreichtem Tageslimit; Drehen zählt als neuer Einstieg und braucht die
-   Freigaben aus Schritt 6.
+   Freigaben aus Schritt 6. Beim Drehen erst schließen, dann die neue
+   Lotgröße mit dem neuen Kontostand berechnen.
 6. **Einstieg** nur, wenn alle zutreffen: Signal vorhanden · keine offene
    Position · Tageslimit nicht erreicht · Spread ≤ Grenze (Start 0,50 $) ·
    die **nächste** Kerze ist keine erste Kerze nach einer Pause und es sind
@@ -103,8 +124,11 @@ Handelszeit: **rund um die Uhr** (wie im Video), nur mit diesen Filtern.
 ### 3.5 Stop und Ziel
 - Ab dem **tatsächlichen Ausführungspreis**: Stop = Einstieg ∓ 1,5 × ATR,
   Ziel = Einstieg ± 3 × ATR (= 2R). ATR der Signal-Kerze.
-- Lotgröße wird vor der Order mit dem aktuellen Ask/Bid berechnet; weicht die
-  Ausführung leicht ab, bleiben Stop und Ziel am echten Preis ausgerichtet.
+- Ablauf, damit eine Position **nie ohne Stop** ist: Order mit Stop/Ziel
+  berechnet vom aktuellen Ask/Bid senden; nach der Ausführung Stop/Ziel auf
+  den echten Ausführungspreis nachstellen, wenn er um mehr als 1 Tick abweicht.
+  Lotgröße wird mit dem aktuellen Ask/Bid berechnet.
+- Teilausführung: es gilt die tatsächlich ausgeführte Menge.
 - Springt der Kurs über den Stop (Pause, Nachricht), wird zum ersten
   verfügbaren Kurs geschlossen – im Backtest genauso.
 - Backtest: Berühren Stop und Ziel dieselbe 1-Minuten-Kerze, zählt der
@@ -121,7 +145,8 @@ Handelszeit: **rund um die Uhr** (wie im Video), nur mit diesen Filtern.
   Long und Short.
 - Wochenende – **V:** (a) halten oder (b) freitags 15 Min vor Handelsschluss
   schließen. Gehalten wird nur, wenn Swap + Wochenend-Lücken im Backtest
-  höchstens 10 % des Strategie-Gewinns kosten; sonst (b).
+  höchstens 10 % des Strategie-Gewinns kosten; sonst – und auch wenn die
+  Strategie insgesamt keinen Gewinn macht – (b).
 
 ### 3.8 Größe und Limits
 - Lotgröße = 1 % des Kontostands / (Stop-Abstand × Kontraktgröße), abgerundet
@@ -158,6 +183,21 @@ Broker-Werte, die mit deinem Demokonto feststehen (Phase 4) und nur
 eingetragen werden: Symbolname, Kontraktgröße, Mindest-Lot und Lot-Schritt,
 Mindest-Stop-Abstand, Serverzeit, Zeiten der täglichen Pause und des
 Wochenschlusses, Swap-Sätze und Dreifach-Swap-Tag, Kommission.
+
+**Reihenfolge der Entscheidungen im Backtest** (nur auf den Entwicklungsjahren
+2004–2018, damit wir nicht tausende Varianten gleichzeitig ausprobieren und
+uns ein Glückstreffer täuscht):
+1. Grundeinstellung für alle anderen V-Punkte: Gegensignal = ignorieren,
+   Wochenende = schließen, Wartezeit nach VWAP-Neustart = 4 Kerzen,
+   Nachrichten-Filter aus, Dukascopy-Volumen.
+2. Damit die 40 Kombinationen rechnen → beste stabile Kombination wählen.
+3. Mit dieser Kombination die übrigen V-Punkte **einzeln nacheinander**
+   prüfen: Gegensignal → Wochenende → Wartezeit → Nachrichten-Filter.
+   Eine Änderung wird nur übernommen, wenn sie klar besser ist (mehr Ø R
+   **und** nicht größerer Rückgang), sonst bleibt die Grundeinstellung.
+4. Volumen-Gegenprobe (Tick-Anzahl statt Dukascopy-Volumen) – nur Kontrolle,
+   keine Auswahl.
+5. Erst danach die einmalige Prüfung auf 2019–heute.
 
 Ergebnis des Backtests: **eine** feste Einstellung für jeden V-Punkt. Danach
 ist die Strategie zu 100 % festgelegt und wird live nicht mehr verändert,
