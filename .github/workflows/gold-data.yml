@@ -1,0 +1,126 @@
+# Downloads XAU/USD (gold) history from Dukascopy's free data (candles from
+# June 1999) and publishes it as assets of the GitHub release
+# "data-xauusd-<timeframe>", so the repository itself stays small.
+# Candles come one file per year and price side (bid and ask, so the backtest
+# sees the real spread); ticks come one file per month (they hold both sides).
+# Start it by hand: Actions > Gold-Daten > Run workflow. Planned runs:
+#   1. timeframe m1,   from 1999, price both  (all of history, candles)
+#   2. timeframe tick, from 2023              (recent years, every price change)
+name: Gold-Daten
+
+on:
+  workflow_dispatch:
+    inputs:
+      timeframe:
+        description: "tick, m1 (default), m5, m15, h1"
+        default: "m1"
+      from_year:
+        description: "First year (gold candles from 1999; ticks: keep to recent years)"
+        default: "1999"
+      to_year:
+        description: "Last year (empty = this year)"
+        default: ""
+      price_type:
+        description: "Candles only: both (default), bid or ask"
+        default: "both"
+
+permissions:
+  contents: write
+
+jobs:
+  periods:
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.p.outputs.list }}
+    steps:
+      - id: p
+        run: |
+          last="${{ inputs.to_year }}"; [ -z "$last" ] && last=$(date -u +%Y)
+          if [ "${{ inputs.timeframe }}" = "tick" ]; then
+            now=$(date -u +%Y-%m)
+            list=$(for y in $(seq "${{ inputs.from_year }}" "$last"); do for m in $(seq -w 1 12); do
+              [ "$y-$m" \> "$now" ] || echo "$y-$m"; done; done)
+          else
+            list=$(seq "${{ inputs.from_year }}" "$last")
+          fi
+          n=$(echo "$list" | wc -l)
+          if [ "$n" -gt 256 ]; then
+            echo "::error::$n periods; GitHub allows 256 jobs per run. Choose fewer years."
+            exit 1
+          fi
+          echo "list=$(echo "$list" | jq -cRs 'split("\n") | map(select(length > 0))')" >> "$GITHUB_OUTPUT"
+
+  download:
+    needs: periods
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        period: ${{ fromJson(needs.periods.outputs.list) }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Download ${{ matrix.period }}
+        run: |
+          p=${{ matrix.period }}
+          tf=${{ inputs.timeframe }}
+          if [ "$tf" = "tick" ]; then
+            from="$p-01"
+            to=$(date -u -d "$from + 1 month" +%Y-%m-%d)
+            sides=tick
+          else
+            from="$p-01-01"
+            to=$(( p + 1 ))-01-01
+            sides=${{ inputs.price_type }}
+            [ "$sides" = "both" ] && sides="bid ask"
+          fi
+          [ "$(date -u +%s)" -lt "$(date -u -d "$to" +%s)" ] && to=now
+          for side in $sides; do
+            rm -rf out
+            opts="-p $side"; [ "$side" = "tick" ] && opts=""
+            npx --yes dukascopy-node@1.51.0 -i xauusd -from "$from" -to "$to" -t "$tf" $opts -v -f csv \
+              -dir out -r 5 -rp 2000 -re -bs 5 -bp 1500 -s \
+              --chrome-path "$(command -v google-chrome || command -v chromium || true)"
+            name="xauusd-$tf-$side-$p.csv"
+            mv "$(ls out/*.csv | head -1)" "$name"
+            echo "$name: $(( $(wc -l < "$name") - 1 )) rows; header, first, last:"
+            head -2 "$name"; tail -1 "$name"
+            gzip -9 "$name"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: part-${{ matrix.period }}
+          path: "*.csv.gz"
+          retention-days: 3
+
+  publish:
+    needs: download
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: part-*
+          merge-multiple: true
+          path: files
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="data-xauusd-${{ inputs.timeframe }}"
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "Gold (XAU/USD) ${{ inputs.timeframe }}" \
+            --notes "Dukascopy XAU/USD ${{ inputs.timeframe }} data as gzip CSV (timestamps in ms UTC). Made by the Gold-Daten workflow." --latest=false
+          gh release upload "$tag" files/*.csv.gz --clobber
+          ls -la files
+          {
+            echo "### Gold-Daten ${{ inputs.timeframe }}"
+            echo "Release: https://github.com/${{ github.repository }}/releases/tag/$tag"
+            echo '```'; ls -la files; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
