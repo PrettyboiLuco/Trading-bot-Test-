@@ -31,30 +31,83 @@ Scalping – bei Gold frisst der Spread (0,10–0,30 $) in so kurzer Zeit den
 Gewinn, und über MT5 vom Mac sind wir zu langsam gegen professionelle
 Hochfrequenz-Händler.
 
-## 3. Die Strategie: EMA kreuzt VWAP (steht fest)
+## 3. Die Strategie: EMA kreuzt VWAP – genaue Regeln für den Bot
 
-| Regel | Wert |
-| --- | --- |
-| Signal Long | EMA kreuzt den VWAP von unten nach oben |
-| Signal Short | EMA kreuzt den VWAP von oben nach unten |
-| Bestätigung | Kerze mit dem Kreuz muss geschlossen sein |
-| Einstieg | Eröffnung der nächsten Kerze |
-| Stop-Loss | 1,5 × ATR(14) vom Einstieg |
-| Take-Profit | 2 × Stop-Abstand (2R) |
-| Risiko | 1 % des Kontos pro Trade |
-| Gegensignal | neues Kreuz in Gegenrichtung schließt den offenen Trade (im Backtest prüfen: ja/nein) |
+Grundidee aus dem Video: EMA kreuzt VWAP → nach Kerzenschluss mit der nächsten
+Kerze einsteigen, Stop 1,5 × ATR(14), Ziel 2R, 1 % Risiko. Ausgangspunkt
+**EMA 20 + Wochen-VWAP auf 15 Minuten.** Unten jede Einzelheit so, dass der
+Bot nichts „nach Gefühl“ entscheiden muss. **V** = Variante, die der Backtest
+vergleicht; der Rest ist fest.
 
-Ausgangspunkt wie im Video: **EMA 20 + Wochen-VWAP auf 15 Minuten.**
-Der Backtest prüft alle **40 Kombinationen** (5 EMA-Längen, z. B. 9/20/50/100/200 ×
-Tages-/Wochen-VWAP × 5/15/30/60 Min), um zu sehen, ob EMA 20 + Wochen-VWAP auf
-Gold wirklich vorn liegt oder ob eine Nachbar-Einstellung stabiler ist. Die
-Regeln selbst ändern sich nicht.
+### 3.1 Preise und Kerzen
+- Signale werden auf dem **Mittelkurs** gerechnet: (Bid + Ask) / 2.
+- Gehandelt wird realistisch: **Kauf zum Ask, Verkauf zum Bid**.
+- 15-Minuten-Kerzen (bzw. 5/30/60 im Sweep) baut Rust aus 1-Minuten-Kerzen.
+  Zeitbasis ist die Broker-Serverzeit (live) bzw. UTC (Backtest).
 
-Zusätzlich:
-- Jede Order **immer** mit Stop-Loss und Take-Profit
-- Kein Einstieg, wenn der Spread über einer Grenze liegt (z. B. 0,50 $)
-- Optional, im Backtest geprüft: keine Einstiege 15 Min vor/nach wichtigen US-Daten
-- Magic Number 1001 für alle Trades dieser Strategie
+### 3.2 Indikatoren
+- **EMA(n)** auf dem Schlusskurs, Glättung 2/(n+1), Start mit dem
+  Durchschnitt der ersten n Kerzen. Vor 3 × n Kerzen kein Signal (Einlaufzeit).
+- **VWAP** = Σ(typischer Preis × Volumen) / Σ Volumen seit dem Startpunkt,
+  typischer Preis = (Hoch + Tief + Schluss) / 3.
+  - Wochen-VWAP: Start mit der ersten Kerze der Handelswoche (Sonntagabend nach der Wochenend-Pause)
+  - Tages-VWAP: Start mit der ersten Kerze des Handelstags (nach der täglichen Pause)
+  - Volumen: im Backtest das Dukascopy-Volumen, live das Tick-Volumen von MT5.
+    **V:** Der Backtest rechnet zusätzlich mit „Anzahl Preisänderungen“ als
+    Volumen – ist das Ergebnis ähnlich, passt die Live-Rechnung zum Backtest.
+- **ATR(14)** nach Wilder, auf demselben Zeitrahmen, Wert der Signal-Kerze.
+
+### 3.3 Signal
+- **Long:** Vorherige Kerze EMA ≤ VWAP **und** Signal-Kerze EMA > VWAP
+  (beide Kerzen geschlossen). **Short:** genau umgekehrt.
+- Gleichstand (EMA = VWAP) zählt nicht als Kreuz.
+
+### 3.4 Einstieg
+- Mit der Eröffnung der nächsten Kerze, als Market-Order.
+- Im Backtest mit Verzögerung (z. B. 300 ms) und Slippage-Aufschlag.
+- Kein Einstieg, wenn: schon eine Position offen ist · Spread über Grenze
+  (Start 0,50 $) · weniger als 15 Min bis zur täglichen Handelspause oder
+  zum Wochenschluss · Tageslimit erreicht · Brücke/Kurse gestört.
+- Handelszeit: **rund um die Uhr** (wie im Video), nur mit diesen Filtern.
+
+### 3.5 Stop und Ziel
+- Gemessen ab dem **tatsächlichen Einstiegspreis**:
+  Stop = Einstieg ∓ 1,5 × ATR, Ziel = Einstieg ± 3 × ATR (= 2R).
+- Beide werden sofort mit der Order an MT5 übergeben.
+- Springt der Kurs über den Stop (z. B. nach einer Pause), wird zum ersten
+  verfügbaren Kurs geschlossen – im Backtest genauso.
+
+### 3.6 Position und Gegensignal
+- Höchstens **eine** Position gleichzeitig. Neues Kreuz in dieselbe Richtung: ignorieren.
+- Kreuz in die **Gegenrichtung** bei offener Position – **V**, drei Varianten:
+  1. schließen und sofort drehen
+  2. nur schließen
+  3. ignorieren (bis Stop/Ziel)
+  Der Backtest nimmt die stabilste.
+
+### 3.7 Über Nacht und Wochenende
+- Über Nacht halten ist erlaubt. Kosten (Swap) werden im Backtest pro Nacht
+  abgezogen, mittwochs dreifach, getrennt für Long und Short. Die echten
+  Swap-Sätze deines Brokers stellen wir in Phase 4 ein.
+- Wochenende – **V:** (a) halten oder (b) freitags 15 Min vor Handelsschluss
+  schließen. Regel: gehalten wird nur, wenn Swap + Wochenend-Lücken im Backtest
+  **wenig kosten** (Grenze: höchstens 10 % des Gewinns der Strategie);
+  sonst wird freitags geschlossen.
+
+### 3.8 Größe und Limits
+- Lotgröße = 1 % des Kontostands / (Stop-Abstand × Kontraktgröße), abgerundet
+  auf den Lot-Schritt; unter Mindest-Lot → kein Trade.
+- Tageslimit −3 % vom Kontostand zu Tagesbeginn → bis Tagesende keine neuen Trades.
+- Keine Begrenzung der Trades pro Tag.
+
+### 3.9 Weitere Varianten im Backtest (**V**)
+- 40 Kombinationen: EMA 9/20/50/100/200 × Tages-/Wochen-VWAP × 5/15/30/60 Min
+- Nachrichten-Filter an/aus (15 Min vor/nach wichtigen US-Daten)
+- Kosten: Spread aus den Daten, Kommission und Swap einstellbar
+
+Ergebnis des Backtests: **eine** feste Einstellung für jeden V-Punkt. Danach
+ist die Strategie zu 100 % festgelegt und wird live nicht mehr verändert,
+außer nach einem neuen, gleich strengen Backtest.
 
 ## 4. Risiko-Regeln
 
@@ -239,7 +292,10 @@ Server).
 ## 12. Entscheidungen
 
 Getroffen:
-- Strategie: EMA kreuzt VWAP (Ausgangspunkt EMA 20 + Wochen-VWAP, 15 Min)
+- Strategie: EMA kreuzt VWAP (Ausgangspunkt EMA 20 + Wochen-VWAP, 15 Min), genaue Regeln in Abschnitt 3
+- Gegensignal: Backtest entscheidet zwischen drehen / schließen / ignorieren
+- Halten über Nacht ja; übers Wochenende nur, wenn es wenig kostet (Backtest prüft)
+- Neue Trades rund um die Uhr
 - Risiko auf Demo: Standard 1 % pro Trade, Tageslimit −3 %
 - Tagebuch-Upload nach GitHub: ja
 - Dauerbetrieb: eigener Mac mini als Server
