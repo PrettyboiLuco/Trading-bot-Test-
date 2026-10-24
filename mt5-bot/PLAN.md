@@ -35,96 +35,139 @@ Hochfrequenz-Händler.
 
 Grundidee aus dem Video: EMA kreuzt VWAP → nach Kerzenschluss mit der nächsten
 Kerze einsteigen, Stop 1,5 × ATR(14), Ziel 2R, 1 % Risiko. Ausgangspunkt
-**EMA 20 + Wochen-VWAP auf 15 Minuten.** Unten jede Einzelheit so, dass der
-Bot nichts „nach Gefühl“ entscheiden muss. **V** = Variante, die der Backtest
-vergleicht; der Rest ist fest.
+**EMA 20 + Wochen-VWAP auf 15 Minuten.** Unten jede Einzelheit, damit der Bot
+nichts „nach Gefühl“ entscheidet. **V** = Variante, die der Backtest
+vergleicht; alles andere ist fest. Die Abschnitte stehen in der Reihenfolge,
+in der der Bot arbeitet.
 
 ### 3.1 Preise und Kerzen
-- Signale werden auf dem **Mittelkurs** gerechnet: (Bid + Ask) / 2.
-- Gehandelt wird realistisch: **Kauf zum Ask, Verkauf zum Bid**.
-- 15-Minuten-Kerzen (bzw. 5/30/60 im Sweep) baut Rust aus 1-Minuten-Kerzen.
-  Zeitbasis ist die Broker-Serverzeit (live) bzw. UTC (Backtest).
+- Signale und Indikatoren auf dem **Bid-Kurs** – so wie die Kerzen, die du in
+  MT5 siehst (MT5 zeichnet Bid). Backtest und Live rechnen damit identisch.
+- Gehandelt wird realistisch: **Kauf zum Ask, Verkauf zum Bid**; ein Long-Stop
+  löst am Bid aus, ein Short-Stop am Ask.
+- 15-Minuten-Kerzen (bzw. 5/30/60 im Sweep) baut Rust aus 1-Minuten-Kerzen,
+  ausgerichtet an der Broker-Serverzeit (Backtest: Dukascopy-UTC auf die
+  Serverzeit des Brokers umgerechnet).
 
 ### 3.2 Indikatoren
-- **EMA(n)** auf dem Schlusskurs, Glättung 2/(n+1), Start mit dem
-  Durchschnitt der ersten n Kerzen. Vor 3 × n Kerzen kein Signal (Einlaufzeit).
+- **EMA(n)** auf dem Schlusskurs, Glättung 2/(n+1), Start mit dem Durchschnitt
+  der ersten n Kerzen. Läuft über Pausen und Wochenenden einfach weiter.
 - **VWAP** = Σ(typischer Preis × Volumen) / Σ Volumen seit dem Startpunkt,
   typischer Preis = (Hoch + Tief + Schluss) / 3.
-  - Wochen-VWAP: Start mit der ersten Kerze der Handelswoche (Sonntagabend nach der Wochenend-Pause)
-  - Tages-VWAP: Start mit der ersten Kerze des Handelstags (nach der täglichen Pause)
-  - Volumen: im Backtest das Dukascopy-Volumen, live das Tick-Volumen von MT5.
-    **V:** Der Backtest rechnet zusätzlich mit „Anzahl Preisänderungen“ als
-    Volumen – ist das Ergebnis ähnlich, passt die Live-Rechnung zum Backtest.
-- **ATR(14)** nach Wilder, auf demselben Zeitrahmen, Wert der Signal-Kerze.
+  - Wochen-VWAP: Neustart mit der ersten Kerze der Handelswoche
+  - Tages-VWAP: Neustart mit der ersten Kerze nach der täglichen Pause
+  - Volumen: Backtest Dukascopy-Volumen, live MT5-Tick-Volumen.
+    **V:** zusätzlich „Anzahl Preisänderungen“ als Volumen; nur wenn beide
+    ähnlich abschneiden, gilt der Backtest auch für live.
+- **ATR(14)** nach Wilder, gleicher Zeitrahmen, Wert der Signal-Kerze.
 
 ### 3.3 Signal
-- **Long:** Vorherige Kerze EMA ≤ VWAP **und** Signal-Kerze EMA > VWAP
-  (beide Kerzen geschlossen). **Short:** genau umgekehrt.
-- Gleichstand (EMA = VWAP) zählt nicht als Kreuz.
+- Ein Signal ist das **Ereignis „Kreuz“**, nicht der Zustand „EMA über VWAP“.
+- **Long:** vorherige Kerze EMA ≤ VWAP **und** Signal-Kerze EMA > VWAP
+  (beide geschlossen). **Short:** umgekehrt. Gleichstand ist kein Kreuz.
+- **Kein Signal**, wenn
+  - die vorherige Kerze zu einem anderen VWAP-Abschnitt gehört (beim
+    Neustart des VWAP springt er auf den aktuellen Preis – ein „Kreuz“ dort
+    ist ein Rechen-Effekt, kein Marktsignal); zusätzlich erst ab der
+    **4. Kerze** nach dem Neustart, weil der VWAP vorher kaum Daten hat (**V:** 1/4/8 Kerzen)
+  - zwischen den beiden Kerzen eine Handelspause lag (Wochenende, tägliche Pause)
+  - die Einlaufzeit noch läuft: weniger als 3 × n Kerzen EMA-Historie
+- Ein Signal, das nicht sofort zu einem Einstieg führt (Filter, offene
+  Position), **verfällt**. Es wird später nicht nachgeholt.
 
-### 3.4 Einstieg
-- Mit der Eröffnung der nächsten Kerze, als Market-Order.
-- Im Backtest mit Verzögerung (z. B. 300 ms) und Slippage-Aufschlag.
-- Kein Einstieg, wenn: schon eine Position offen ist · Spread über Grenze
-  (Start 0,50 $) · weniger als 15 Min bis zur täglichen Handelspause oder
-  zum Wochenschluss · Tageslimit erreicht · Brücke/Kurse gestört.
-- Handelszeit: **rund um die Uhr** (wie im Video), nur mit diesen Filtern.
+### 3.4 Ablauf bei jedem Kerzenschluss (feste Reihenfolge)
+1. **Abgleich mit MT5:** Ist die Position noch offen? (Stop/Ziel löst MT5
+   zwischen den Kerzen selbst aus.) Kontostand, Tagesergebnis aktualisieren.
+2. **Wochenende:** Freitag 15 Min vor Handelsschluss und Variante „schließen“
+   → offene Position schließen, Ende.
+3. **Tageslimit prüfen** (siehe 3.8).
+4. **Indikatoren** mit der geschlossenen Kerze aktualisieren, Signal prüfen.
+5. **Gegensignal** bei offener Position (**V**): 1 schließen und drehen ·
+   2 nur schließen · 3 ignorieren. Schließen ist immer erlaubt, auch nach
+   erreichtem Tageslimit; Drehen zählt als neuer Einstieg und braucht die
+   Freigaben aus Schritt 6.
+6. **Einstieg** nur, wenn alle zutreffen: Signal vorhanden · keine offene
+   Position · Tageslimit nicht erreicht · Spread ≤ Grenze (Start 0,50 $) ·
+   die **nächste** Kerze ist keine erste Kerze nach einer Pause und es sind
+   mehr als 15 Min bis zur nächsten Pause/zum Wochenschluss · Kurse und
+   Brücke ohne Störung · Stop-Abstand ≥ Mindestabstand des Brokers ·
+   Lotgröße ≥ Mindest-Lot · (**V:** keine wichtigen US-Daten in ±15 Min).
+7. **Order** zur Eröffnung der nächsten Kerze als Market-Order, mit Stop und
+   Ziel. Lehnt MT5 ab: einmal sofort neu versuchen, sonst auslassen und
+   protokollieren.
+8. **Protokoll:** jedes Signal mit Entscheidung und Grund („Einstieg“,
+   „ausgelassen: Spread 0,62 $“, …).
+
+Handelszeit: **rund um die Uhr** (wie im Video), nur mit diesen Filtern.
 
 ### 3.5 Stop und Ziel
-- Gemessen ab dem **tatsächlichen Einstiegspreis**:
-  Stop = Einstieg ∓ 1,5 × ATR, Ziel = Einstieg ± 3 × ATR (= 2R).
-- Beide werden sofort mit der Order an MT5 übergeben.
-- Springt der Kurs über den Stop (z. B. nach einer Pause), wird zum ersten
+- Ab dem **tatsächlichen Ausführungspreis**: Stop = Einstieg ∓ 1,5 × ATR,
+  Ziel = Einstieg ± 3 × ATR (= 2R). ATR der Signal-Kerze.
+- Lotgröße wird vor der Order mit dem aktuellen Ask/Bid berechnet; weicht die
+  Ausführung leicht ab, bleiben Stop und Ziel am echten Preis ausgerichtet.
+- Springt der Kurs über den Stop (Pause, Nachricht), wird zum ersten
   verfügbaren Kurs geschlossen – im Backtest genauso.
-- Backtest: Werden Stop und Ziel in derselben 1-Minuten-Kerze berührt, zählt
-  der **Stop** (vorsichtige Annahme); für 2023–heute entscheiden die Ticks.
-- Live: Lehnt MT5 eine Order ab (z. B. Requote), versucht der Bot es einmal
-  sofort neu; klappt es nicht, wird das Signal ausgelassen und protokolliert.
+- Backtest: Berühren Stop und Ziel dieselbe 1-Minuten-Kerze, zählt der
+  **Stop**; für 2023–heute entscheiden die Ticks.
+- Kein Nachziehen des Stops, kein Teil-Schließen (wie im Video).
 
-### 3.6 Position und Gegensignal
-- Höchstens **eine** Position gleichzeitig. Neues Kreuz in dieselbe Richtung: ignorieren.
-- Kreuz in die **Gegenrichtung** bei offener Position – **V**, drei Varianten:
-  1. schließen und sofort drehen
-  2. nur schließen
-  3. ignorieren (bis Stop/Ziel)
-  Der Backtest nimmt die stabilste.
+### 3.6 Positionen
+- Höchstens **eine** Position gleichzeitig.
+- Nach Stop oder Ziel wird erst beim **nächsten neuen Kreuz** wieder eingestiegen.
 
 ### 3.7 Über Nacht und Wochenende
-- Über Nacht halten ist erlaubt. Kosten (Swap) werden im Backtest pro Nacht
-  abgezogen, mittwochs dreifach, getrennt für Long und Short. Die echten
-  Swap-Sätze deines Brokers stellen wir in Phase 4 ein.
+- Über Nacht halten ist erlaubt. Swap wird im Backtest pro Nacht abgezogen,
+  an einem Wochentag dreifach (meist Mittwoch, je nach Broker), getrennt für
+  Long und Short.
 - Wochenende – **V:** (a) halten oder (b) freitags 15 Min vor Handelsschluss
-  schließen. Regel: gehalten wird nur, wenn Swap + Wochenend-Lücken im Backtest
-  **wenig kosten** (Grenze: höchstens 10 % des Gewinns der Strategie);
-  sonst wird freitags geschlossen.
+  schließen. Gehalten wird nur, wenn Swap + Wochenend-Lücken im Backtest
+  höchstens 10 % des Strategie-Gewinns kosten; sonst (b).
 
 ### 3.8 Größe und Limits
 - Lotgröße = 1 % des Kontostands / (Stop-Abstand × Kontraktgröße), abgerundet
   auf den Lot-Schritt; unter Mindest-Lot → kein Trade.
-- Tageslimit −3 % vom Kontostand zu Tagesbeginn → bis Tagesende keine neuen Trades.
+- **Tageslimit:** Fällt das Kapital (Kontostand **inkl.** offener Position)
+  um 3 % unter den Stand zu Beginn des Handelstags (Serverzeit), gibt es bis
+  zum nächsten Handelstag keine neuen Einstiege. Eine offene Position läuft
+  mit ihrem Stop weiter.
 - Keine Begrenzung der Trades pro Tag.
 
-### 3.9 Weitere Varianten im Backtest (**V**)
-- 40 Kombinationen: EMA 9/20/50/100/200 × Tages-/Wochen-VWAP × 5/15/30/60 Min
-- Nachrichten-Filter an/aus (15 Min vor/nach wichtigen US-Daten)
-- Kosten: Spread aus den Daten, Kommission und Swap einstellbar
+### 3.9 Start und Neustart des Bots
+- Beim Start lädt der Bot über die Brücke genug Historie, damit EMA, ATR und
+  VWAP sofort stimmen: mindestens 3 × n Kerzen **und** alles seit Beginn der
+  aktuellen Woche. Vorher kein Signal.
+- Offene Position des Bots (erkannt an der Magic Number 1001) wird übernommen,
+  nicht doppelt eröffnet. Ein Kreuz, das während der Ausfallzeit lag, wird
+  nicht nachgeholt.
 
-Broker-Werte, die erst mit deinem Demokonto feststehen (Phase 4) und nur
-eingetragen, nicht entschieden werden: Symbolname, Kontraktgröße, Mindest-Lot
-und Lot-Schritt, Serverzeit, Zeiten der täglichen Pause, Swap-Sätze, Kommission.
+### 3.10 Was nur informiert und die Strategie nicht verändert
+- **Time Machine** (aus dem Day-Trader-Skill): rechnet für jeden Einstieg die
+  Trefferchance aus und schreibt sie in den Bericht. Sie **filtert nicht** –
+  sonst wäre es eine andere Strategie als die getestete.
+
+### 3.11 Weitere Varianten im Backtest (**V**) und Broker-Werte
+- 40 Kombinationen: EMA 9/20/50/100/200 × Tages-/Wochen-VWAP × 5/15/30/60 Min
+  (die fünf EMA-Längen hat das Video nicht genannt; das ist unsere Auswahl)
+- Nachrichten-Filter an/aus. Dafür brauchen wir einen Terminkalender mit
+  wichtigen US-Daten; live liefert MT5 ihn (Wirtschaftskalender), für den
+  Backtest suchen wir eine historische Quelle. Gibt es keine verlässliche,
+  bleibt der Filter aus.
+- Kosten: Spread aus den Daten, Kommission und Swap einstellbar.
+
+Broker-Werte, die mit deinem Demokonto feststehen (Phase 4) und nur
+eingetragen werden: Symbolname, Kontraktgröße, Mindest-Lot und Lot-Schritt,
+Mindest-Stop-Abstand, Serverzeit, Zeiten der täglichen Pause und des
+Wochenschlusses, Swap-Sätze und Dreifach-Swap-Tag, Kommission.
 
 Ergebnis des Backtests: **eine** feste Einstellung für jeden V-Punkt. Danach
 ist die Strategie zu 100 % festgelegt und wird live nicht mehr verändert,
 außer nach einem neuen, gleich strengen Backtest.
 
-## 4. Risiko-Regeln
+## 4. Risiko-Regeln (Kurzfassung, Details in 3.4–3.8)
 
-- **1 % des Kontos pro Trade** (auf Demo frei wählbar; 1 % bleibt Standard,
-  damit die Demo-Ergebnisse dem entsprechen, was später realistisch wäre). Lotgröße = Risiko in $ / (Stop-Abstand × Kontraktgröße),
-  abgerundet auf die Lot-Schrittweite des Brokers (Gold meist 100 oz pro Lot, 0,01 Lot).
-  Wäre selbst 0,01 Lot zu groß, wird der Trade ausgelassen, nicht vergrößert.
-- **Tageslimit:** −3 % → keine neuen Trades bis zum nächsten Tag
-- **Höchstens 1 offene Position** gleichzeitig
+- 1 % des Kontostands pro Trade (Standard; auf Demo änderbar)
+- Tageslimit −3 % (inkl. offener Position), danach keine neuen Einstiege
+- Höchstens 1 offene Position, immer mit Stop und Ziel
 - **Not-Aus:** Befehl `stop` → alles schließen, keine neuen Trades
 - **Demo erzwungen:** Das System fragt über die Brücke den Kontotyp ab und
   verweigert ein Echtgeld-Konto, bis das ausdrücklich freigeschaltet wird.
