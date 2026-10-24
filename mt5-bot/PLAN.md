@@ -18,9 +18,9 @@ MacBook
 │              ▲   JSON-Nachrichten über TCP, nur 127.0.0.1
 │              ▼
 └─ mt5-bot (Rust)
-     ├─ Marktdaten      Kerzen + Bid/Ask live oder aus CSV
+     ├─ Marktdaten      Ticks + Kerzen (Bid/Ask) live oder aus CSV
      ├─ Sitzungen       Asien/London/New York, Sommerzeit, Broker-Serverzeit
-     ├─ Strategie       London Breakout (austauschbar)
+     ├─ Strategie       Scalping-Ansätze (austauschbar)
      ├─ Risiko          Lotgröße, Limits, Spread-Filter, Not-Aus
      ├─ Ausführung      simuliert (Backtest) | MT5 (live) – gleiche Schnittstelle
      ├─ Zustand         Abgleich mit MT5 nach jedem Start
@@ -39,11 +39,12 @@ Grundsatz wie bei barter-rs: **Backtest und Live laufen durch denselben Code**,
 nur die Ausführung wird ausgetauscht. Was im Backtest funktioniert, ist genau
 das, was live läuft.
 
-Zur Geschwindigkeit: Rust reagiert in Mikrosekunden, die Strecke Rust → MT5 →
-Broker dauert Millisekunden. Bei 5-Minuten-Kerzen entscheidet das kaum über den
-Gewinn; der eigentliche Vorteil von Rust ist hier **Zuverlässigkeit**: strenge
-Typen für Preise, Lots und Zeiten fangen die Fehler ab, die beim Traden am
-meisten kosten.
+Zur Geschwindigkeit: Bei vielen kleinen Trades zählt sie. Rust entscheidet in
+Mikrosekunden und verarbeitet jeden Tick sofort; die Strecke Rust → MT5 →
+Broker dauert Millisekunden (lokal über TCP, die Brücke reagiert auf jeden Tick,
+nicht im Sekundentakt). Den größten Teil der Verzögerung macht der Broker – das
+bildet der Backtest ab. Dazu kommt **Zuverlässigkeit**: strenge Typen für Preise,
+Lots und Zeiten fangen die Fehler ab, die beim Traden am meisten kosten.
 
 ## 3. Ordner und Bausteine
 
@@ -53,13 +54,15 @@ mt5-bot/
 ├─ config.example.toml        Symbol, Risiko, Uhrzeiten, Strategie-Parameter
 ├─ src/
 │  ├─ main.rs                 Befehle: backtest | live | selftest
-│  ├─ data.rs                 CSV(.gz) laden, Lücken/Duplikate prüfen
+│  ├─ data.rs                 Kerzen + Ticks (CSV.gz) laden, Lücken/Duplikate prüfen
 │  ├─ session.rs              Zeitzonen, Sitzungen, Feiertage, Handelspausen
 │  ├─ strategy/mod.rs         Strategie-Schnittstelle
-│  ├─ strategy/london.rs      London Breakout
+│  ├─ strategy/breakout.rs    Mikro-Ausbruch zur Sitzungseröffnung
+│  ├─ strategy/meanrev.rs     Rückkehr zum Mittelwert
+│  ├─ strategy/momentum.rs    Momentum-Fortsetzung
 │  ├─ risk.rs                 Lotgröße, Tageslimits, Spread-Filter
 │  ├─ broker/mod.rs           Ausführungs-Schnittstelle
-│  ├─ broker/sim.rs           Simulation: Spread, Kommission, Slippage
+│  ├─ broker/sim.rs           Simulation auf Ticks: Bid/Ask, Kommission, Verzögerung
 │  ├─ broker/mt5.rs           Verbindung zur MQL5-Brücke
 │  ├─ backtest.rs             Lauf über historische Kerzen + Kennzahlen
 │  └─ journal.rs              Trade-Tagebuch, Tagesbericht
@@ -72,60 +75,91 @@ Rust-Bibliotheken: `tokio` (Netzwerk), `serde`/`serde_json` (Nachrichten),
 `csv` + `flate2` (Daten), `ta` oder eigene Funktionen (ATR, EMA),
 `clap` (Befehle), `tracing` (Log).
 
-## 4. Strategie zum Start: London Breakout auf Gold (5-Minuten-Kerzen)
+## 4. Strategie: viele kleine Trades (Scalping) auf Gold
 
-Vorlage: London Breakout aus je-suis-tm/quant-trading und GOLD_ORB.
-Alle Zahlen sind **Startwerte**, die der Backtest bestätigen oder ändern muss.
+Ziel ist **viel Handel mit kleinen Gewinnen und kleinen Verlusten** statt
+weniger großer Trades. Dafür gilt eine harte Wahrheit: **die Kosten entscheiden**.
+Jeder Trade zahlt den Spread (Gold oft 0,10–0,30 $ pro Unze) plus evtl.
+Kommission. Ein Scalp, der auf 1 $ Bewegung zielt, verliert bei 0,25 $ Spread
+schon ein Viertel. Deshalb:
+
+- Entscheidungen auf **1-Minuten-Kerzen und Ticks**, nicht auf 5 Minuten
+- Backtest **immer mit echtem Spread** (Bid und Ask getrennt geladen)
+- nur handeln, wenn Spread und Bewegung zusammenpassen
+  (erwartete Bewegung ≥ mehrfacher Spread)
+
+Mehrere Scalping-Ansätze werden im Backtest gegeneinander geprüft; nur was nach
+Kosten im Plus bleibt, kommt weiter:
+
+| Ansatz | Idee | Wann |
+| --- | --- | --- |
+| Mikro-Ausbruch zur Sitzungseröffnung | Ausbruch aus der Spanne der letzten 15–30 Min bei London- und New-York-Eröffnung, kurzes Ziel | 07:00–10:00 und 13:30–16:00 London |
+| Rückkehr zum Mittelwert | Kurs weit vom kurzen Mittel (VWAP/EMA, Bollinger) in ruhigen Phasen → Gegenbewegung | ruhige Sitzungsteile, kein Trend |
+| Momentum-Fortsetzung | starker Impuls (z. B. 3 Kerzen gleiche Richtung + Volumen) → kurzes Mitlaufen | nur bei engem Spread |
+
+Gemeinsame Regeln (Startwerte, der Backtest stellt sie ein):
 
 | Regel | Startwert |
 | --- | --- |
-| Spanne | Hoch/Tief der Asien-Sitzung, 00:00–07:00 London-Zeit |
-| Spanne zu klein/groß | Tag auslassen, wenn Spanne < 0,5 × oder > 2 × ATR(Tag, 14) |
-| Einstieg | erste 5-Min-Kerze, die über dem Hoch (Kauf) bzw. unter dem Tief (Verkauf) schließt, zwischen 07:00 und 10:00 London |
-| Stop-Loss | Mitte der Spanne (wie beim Alpaca-Bot), mindestens 1 × Spread-Puffer |
-| Take-Profit | +50 $ pro Trade (wie Alpaca-Bot) **oder** fest in R – der Backtest entscheidet |
-| Pro Tag | höchstens 1 Trade je Richtung, höchstens 2 insgesamt |
-| Schließen | spätestens 16:00 London, alles, was noch offen ist |
-| Spread-Filter | kein Einstieg, wenn Spread > festgelegter Wert (z. B. 0,50 $) |
+| Ziel pro Trade | klein, z. B. 1–1,5 × Risiko, oder fester Dollarbetrag |
+| Stop-Loss | eng, an der Volatilität (ATR auf 1 Min) ausgerichtet, nie fehlend |
+| Max. Haltedauer | z. B. 30 Minuten, dann schließen |
+| Trades pro Tag | z. B. bis 20–40 |
+| Spread-Filter | kein Einstieg, wenn Spread > Grenze (z. B. 0,35 $) |
+| Nachrichten | 15 Min vor/nach wichtigen US-Daten (Arbeitsmarkt, Inflation, Zinsentscheid) nicht handeln |
+| Handelszeit | nur London- und New-York-Sitzung, nicht in der dünnen Nacht |
 
-Weitere Strategien (Dual Thrust, New-York-Breakout, EUR/USD) erst, wenn diese
-sauber läuft.
+## 5. Risiko-Regeln (Demokonto)
 
-## 5. Risiko-Regeln (Demokonto, wie Alpaca-Bot)
-
-- Max. Verlust pro Trade: **50 $** → Lotgröße = 50 $ / (Stop-Abstand × Kontraktgröße),
-  abgerundet auf die Lot-Schrittweite des Brokers (Gold meist 100 oz pro Lot, 0,01 Lot Schritt)
-- Max. Verlust pro Tag: **150 $**, danach keine neuen Trades
+- Max. Verlust pro Trade: **kleiner als beim Alpaca-Bot**, Startwert **10 $**
+  → Lotgröße = 10 $ / (Stop-Abstand × Kontraktgröße), abgerundet auf die
+  Lot-Schrittweite (Gold meist 100 oz pro Lot, 0,01 Lot Schritt).
+  Achtung: Bei sehr engen Stops kann schon 0,01 Lot mehr als 10 $ riskieren –
+  dann wird der Trade ausgelassen, nicht vergrößert.
+- Max. Verlust pro Tag: **150 $**, danach Schluss für den Tag
+- Max. Verlustserie: nach z. B. 6 Verlusten in Folge 1 Stunde Pause
+- Höchstens 1 offene Position gleichzeitig (später evtl. mehr)
 - Jede Order **immer** mit Stop-Loss und Take-Profit
-- Not-Aus: Datei/Befehl `stop` → alles schließen, keine neuen Trades
+- Not-Aus: Befehl `stop` → alles schließen, keine neuen Trades
 - **Demo erzwungen**: Das System prüft über die Brücke den Kontotyp und
   verweigert ein Echtgeld-Konto, bis das ausdrücklich freigeschaltet wird.
 
 ## 6. Daten (PR „Gold-Daten“)
 
-- Dukascopy XAU/USD, **5-Minuten-Kerzen, Juni 1999 bis heute**, eine gepackte
-  CSV pro Jahr, als Download im Release `data-xauusd-m5` (nicht im Repo).
-- Das sind Bid-Preise. Der Spread wird im Backtest **aufgeschlagen**
-  (einstellbar, z. B. 0,30 $; für alte Jahre höher). Optional später auch
-  Ask-Daten laden, um echte Spreads zu messen.
-- Vorbehalt: Dukascopy-Kurse weichen leicht von denen deines MT5-Brokers ab.
-  Für die Feinabstimmung exportieren wir später zusätzlich Kerzen direkt aus MT5.
+Zwei Läufe des Workflows, beide als Download im Repo-Release (nicht im Code):
+
+| Lauf | Was | Zeitraum | Wofür |
+| --- | --- | --- | --- |
+| 1 | **1-Minuten-Kerzen, Bid und Ask** | Juni 1999 – heute | Strategien entwickeln, Spread aus Ask − Bid |
+| 2 | **Ticks** (jede Preisänderung, Bid + Ask) | 2023 – heute | realistische Prüfung: Ausführung, Spread, Slippage |
+
+- Quelle: Dukascopy (kostenlos). Größe grob: Kerzen einige hundert MB gepackt,
+  Ticks einige GB – passt in Releases (max. 2 GB pro Datei, Ticks je Monat).
+- Vorbehalt: Dukascopy-Kurse und -Spreads weichen von denen deines MT5-Brokers
+  ab. In Phase 4 messen wir den echten Spread des Brokers und stellen den
+  Backtest darauf ein.
 
 ## 7. Backtest: wie wir prüfen, ob es taugt
 
-- Kosten immer eingerechnet: Spread, Kommission (falls Broker eine hat), Slippage beim Stop
+- **Tick-genaue Simulation** für die letzten Jahre: Einstieg zum Ask (Kauf)
+  bzw. Bid (Verkauf), Stop/Ziel werden an echten Ticks ausgelöst, plus
+  Verzögerung (z. B. 100–300 ms) und Kommission des Brokers
+- Kerzen-Simulation für die lange Historie (schneller, etwas ungenauer)
 - **Trennung der Daten**, damit wir uns nicht selbst betrügen:
-  - 2004–2018: Regeln entwickeln und Parameter wählen
-  - 2019–heute: **einmal** prüfen, ohne danach nachzubessern
-  - zusätzlich Walk-Forward (jedes Jahr mit den Jahren davor eingestellt)
-- Kennzahlen: Gewinn/Verlust, Anzahl Trades, Trefferquote, Ø R pro Trade,
-  größter Rückgang (Drawdown), längste Verlustserie, Ergebnis pro Jahr
+  - 2004–2018 (Kerzen): Regeln entwickeln, Parameter wählen
+  - 2019–2022 (Kerzen): erste Prüfung
+  - 2023–heute (Ticks): **einmal** prüfen, ohne danach nachzubessern
+  - zusätzlich Walk-Forward
+- Kennzahlen: Ergebnis nach Kosten, Anzahl Trades, Trefferquote, Ø Gewinn/Verlust,
+  **Kosten-Anteil** (wie viel vom Bruttogewinn der Spread frisst), Drawdown,
+  längste Verlustserie, Ergebnis pro Jahr und pro Uhrzeit
 - **Weiter nur, wenn** (Go/No-Go):
-  - Ø R pro Trade nach Kosten > 0 im Prüfzeitraum 2019–heute
-  - mindestens 300 Trades insgesamt
-  - größter Rückgang < 20 × Risiko pro Trade
-  - nicht nur 1–2 gute Jahre, die alles tragen
-- Ergebnis: Bericht mit Kurve und Jahrestabelle, bevor irgendetwas live geht
+  - im Tick-Test 2023–heute nach allen Kosten im Plus
+  - mindestens 2.000 Trades (bei vielen kleinen Trades nötig für Aussagekraft)
+  - Spread frisst weniger als die Hälfte des Bruttogewinns
+  - größter Rückgang < 30 × Risiko pro Trade
+  - nicht nur einzelne Monate, die alles tragen
+- Ergebnis: Bericht mit Kurve, Monats- und Uhrzeit-Tabelle, bevor etwas live geht
 
 ## 8. MQL5-Brücke (Expert Advisor)
 
@@ -141,8 +175,8 @@ sauber läuft.
 
 | Phase | Inhalt | Ergebnis / fertig, wenn | Brauche von dir |
 | --- | --- | --- | --- |
-| 0 | Gold-Daten laden (PR #6) | alle Jahre 1999–2026 als Download, Kerzen geprüft | PR mergen |
-| 1 | Rust-Kern: Daten, Sitzungen, Risiko, Strategie, Simulation, Backtest | Tests grün, Backtest läuft über alle Jahre | – |
+| 0 | Gold-Daten laden (PR #6): 1-Min-Kerzen 1999–heute, Ticks 2023–heute | alles als Download, Daten geprüft | PR mergen |
+| 1 | Rust-Kern: Daten (Kerzen + Ticks), Sitzungen, Risiko, Scalping-Strategien, Tick-Simulation, Backtest | Tests grün, Backtest läuft über alle Daten | – |
 | 2 | Backtest-Auswertung | Bericht + Go/No-Go-Entscheidung | deine Entscheidung |
 | 3 | MQL5-Brücke + Live-Teil in Rust | Ablauf-Test mit simulierter Brücke grün | – |
 | 4 | Einrichtung auf deinem Mac | Selbsttest: Kurse kommen an, Test-Order 0,01 Lot auf Demo klappt | MT5 Mac-App, Demokonto, ca. 30 Min |
@@ -154,8 +188,13 @@ Jede Phase kommt als eigener Pull Request, den du vor dem Merge sehen kannst.
 ## 10. Grenzen und Risiken
 
 - Ein guter Backtest ist **keine Garantie**. Gold verhält sich heute anders als 2005.
+- Scalping ist die Strategie-Art, bei der die meisten Systeme nach Kosten
+  verlieren. Gut möglich, dass der Backtest „No-Go“ sagt – dann ist das ein
+  Ergebnis, kein Fehler.
+- Demokonten führen Orders oft besser aus als echte Konten (keine echte
+  Liquidität); Scalping-Ergebnisse auf Demo sind deshalb eher zu optimistisch.
 - Dukascopy-Daten ≠ Kurse deines Brokers (Spread, Serverzeit, Wochenend-Lücken).
-- Mac muss während der Handelszeit (ca. 08:00–17:00 deutsche Zeit) an sein und
+- Mac muss während der Handelszeit (ca. 08:00–18:00 deutsche Zeit) an sein und
   darf nicht schlafen.
 - MT5 auf dem Mac ist eine Windows-Version in einer Kompatibilitätsschicht;
   dass die Netzwerk-Brücke dort läuft, wird in Phase 4 geprüft.
@@ -164,7 +203,7 @@ Jede Phase kommt als eigener Pull Request, den du vor dem Merge sehen kannst.
 
 ## 11. Offene Entscheidungen
 
-1. Strategie zum Start: London Breakout auf Gold – einverstanden?
-2. Take-Profit: +50 $ fest (wie Alpaca) oder vom Backtest bestimmt?
-3. Risiko: 50 $ pro Trade / 150 $ pro Tag auf Demo – einverstanden?
+1. Scalping auf Gold mit den drei Ansätzen oben – einverstanden?
+2. Wie viele Trades pro Tag ungefähr gewünscht (z. B. 10, 20, 40)?
+3. Risiko: 10 $ pro Trade / 150 $ pro Tag auf Demo – einverstanden?
 4. Broker für das MT5-Demokonto (für Phase 4; Kontraktgröße und Symbolname hängen davon ab)
