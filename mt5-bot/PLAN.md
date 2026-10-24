@@ -6,7 +6,8 @@ Jede Phase kommt als eigener Pull Request, den du vor dem Merge siehst.
 ## 1. Ziel
 
 Ein eigenständiges Trading-System in **Rust**, das auf einem **MT5-Demokonto**
-**Gold (XAU/USD)** handelt und auf deinem **MacBook** läuft.
+**Gold (XAU/USD)** handelt – zuerst auf deinem **MacBook**, später auf einem
+eigenen **Mac mini** als Dauer-Server.
 Die Strategie steht fest (EMA kreuzt VWAP) und wird vorher an über 20 Jahren
 Gold-Daten getestet.
 Getrennt vom Alpaca-Bot (eigener Ordner `mt5-bot/`). **Kein echtes Geld** in
@@ -91,32 +92,32 @@ in der der Bot arbeitet.
 - Wochenende, Variante „schließen“: ab Freitag 15 Min vor Handelsschluss
   offene Position schließen. (Bei 60-Minuten-Kerzen läge der Kerzenschluss
   sonst bis zu einer Stunde daneben.)
-- Wächter: kommen keine Kurse oder antwortet die Brücke nicht → Warnung,
-  keine neuen Einstiege. Eine offene Position bleibt geschützt, weil Stop und
-  Ziel beim Broker liegen, nicht im Bot.
+- Wächter: 2 Minuten ohne Kurse (während der Handelszeit) oder Brücke
+  antwortet nicht → keine neuen Einstiege; nach 10 Minuten zusätzlich eine
+  Warnung in den Bericht (später aufs Handy). Eine offene Position bleibt
+  geschützt, weil Stop und Ziel beim Broker liegen, nicht im Bot.
 
 **Bei jedem Kerzenschluss (feste Reihenfolge):**
 1. **Abgleich mit MT5:** Ist die Position noch offen? (Stop/Ziel löst MT5
    zwischen den Kerzen selbst aus.) Kontostand, Tagesergebnis aktualisieren.
 2. **Tageslimit prüfen** (siehe 3.8).
-3. Ist die Position durch die Wochenend-Regel schon geschlossen und ist
-   Freitag nach dieser Uhrzeit: nichts weiter tun.
-4. **Indikatoren** mit der geschlossenen Kerze aktualisieren, Signal prüfen.
-5. **Gegensignal** bei offener Position (**V**): 1 schließen und drehen ·
+3. **Indikatoren** mit der geschlossenen Kerze aktualisieren, Signal prüfen.
+4. **Gegensignal** bei offener Position (**V**): 1 schließen und drehen ·
    2 nur schließen · 3 ignorieren. Schließen ist immer erlaubt, auch nach
    erreichtem Tageslimit; Drehen zählt als neuer Einstieg und braucht die
-   Freigaben aus Schritt 6. Beim Drehen erst schließen, dann die neue
+   Freigaben aus Schritt 5. Beim Drehen erst schließen, dann die neue
    Lotgröße mit dem neuen Kontostand berechnen.
-6. **Einstieg** nur, wenn alle zutreffen: Signal vorhanden · keine offene
+5. **Einstieg** nur, wenn alle zutreffen: Signal vorhanden · keine offene
    Position · Tageslimit nicht erreicht · Spread ≤ Grenze (Start 0,50 $) ·
    die **nächste** Kerze ist keine erste Kerze nach einer Pause und es sind
    mehr als 15 Min bis zur nächsten Pause/zum Wochenschluss · Kurse und
    Brücke ohne Störung · Stop-Abstand ≥ Mindestabstand des Brokers ·
-   Lotgröße ≥ Mindest-Lot · (**V:** keine wichtigen US-Daten in ±15 Min).
-7. **Order** zur Eröffnung der nächsten Kerze als Market-Order, mit Stop und
+   Lotgröße ≥ Mindest-Lot · freie Margin reicht für die Lotgröße ·
+   (**V:** keine wichtigen US-Daten in ±15 Min).
+6. **Order** zur Eröffnung der nächsten Kerze als Market-Order, mit Stop und
    Ziel. Lehnt MT5 ab: einmal sofort neu versuchen, sonst auslassen und
    protokollieren.
-8. **Protokoll:** jedes Signal mit Entscheidung und Grund („Einstieg“,
+7. **Protokoll:** jedes Signal mit Entscheidung und Grund („Einstieg“,
    „ausgelassen: Spread 0,62 $“, …).
 
 Handelszeit: **rund um die Uhr** (wie im Video), nur mit diesen Filtern.
@@ -151,6 +152,9 @@ Handelszeit: **rund um die Uhr** (wie im Video), nur mit diesen Filtern.
 ### 3.8 Größe und Limits
 - Lotgröße = 1 % des Kontostands / (Stop-Abstand × Kontraktgröße), abgerundet
   auf den Lot-Schritt; unter Mindest-Lot → kein Trade.
+- Kontowährung: Live rechnet der Bot mit dem Tick-Wert, den MT5 für das Symbol
+  meldet – damit stimmt die Größe auch bei einem Konto in Euro. Der Backtest
+  rechnet in US-Dollar.
 - **Tageslimit:** Fällt das Kapital (Kontostand **inkl.** offener Position)
   um 3 % unter den Stand zu Beginn des Handelstags (Serverzeit), gibt es bis
   zum nächsten Handelstag keine neuen Einstiege. Eine offene Position läuft
@@ -215,7 +219,7 @@ außer nach einem neuen, gleich strengen Backtest.
 ## 5. Aufbau
 
 ```
-Dein MacBook
+Dein MacBook (später Mac mini)
 ├─ MetaTrader 5 (Mac-App, Demokonto, Gold-Chart)
 │    ├─ RustBridge (Expert Advisor): schickt Kurse/Konto an Rust,
 │    │   führt Rusts Befehle 1:1 aus – keine eigene Handelslogik
@@ -225,7 +229,7 @@ Dein MacBook
 └─ mt5-bot (Rust) – steuert das komplette System
      ├─ Marktdaten       Kerzen + Bid/Ask live (MT5) oder aus CSV (Backtest)
      ├─ Indikatoren      EMA, VWAP (Tag/Woche), ATR
-     ├─ Sitzungen        London/New York, Sommerzeit, Broker-Serverzeit
+     ├─ Handelszeiten    tägliche Pause, Wochenschluss, Sommerzeit, Serverzeit
      ├─ Strategie        EMA kreuzt VWAP
      ├─ Risiko           Lotgröße, Limits, Spread-Filter, Not-Aus
      ├─ Ausführung       simuliert (Backtest) | MT5 (live) – gleiche Schnittstelle
@@ -247,7 +251,7 @@ mt5-bot/
 │  ├─ main.rs                 Befehle: backtest | sweep | live | selftest | stop
 │  ├─ data.rs                 Kerzen laden (CSV.gz), 1 Min → 5/15/30/60 Min umrechnen
 │  ├─ indicators.rs           EMA, VWAP (Tag/Woche), ATR
-│  ├─ session.rs              Zeitzonen, Sitzungen, Wochenende, Feiertage
+│  ├─ session.rs              Zeitzonen, Pausen, Wochenschluss, Feiertage
 │  ├─ strategy/ema_vwap.rs    die Strategie
 │  ├─ risk.rs                 Lotgröße, Limits, Spread-Filter
 │  ├─ broker/sim.rs           Simulation: Spread, Kommission, Slippage
@@ -271,6 +275,12 @@ EMA, VWAP und ATR schreiben wir selbst (wenige Zeilen, voll getestet).
 - Dukascopy XAU/USD, **1-Minuten-Kerzen, Bid und Ask, Juni 1999 – heute**,
   eine Datei pro Jahr, als Download im Repo-Release (nicht im Code).
   5/15/30/60-Minuten-Kerzen rechnet Rust daraus selbst.
+- Zusätzlich **Ticks 2023 – heute** (eine Datei pro Monat): nur für die
+  genaue Prüfung, ob Stop oder Ziel zuerst getroffen wurde (3.5).
+- Datenprüfung in Phase 0: Lücken außerhalb der normalen Pausen, Kerzen mit
+  Volumen 0, Bid > Ask, Ausreißer-Kerzen, Jahre mit fehlenden Daten.
+  Ergebnis als kurzer Bericht; auffällige Zeiträume werden im Backtest
+  ausgelassen und genannt.
 - Spread im Backtest = Ask − Bid aus den Daten.
 - Volumen: Gold ist bei MT5-Brokern ein CFD ohne echtes Börsenvolumen. Der VWAP
   nutzt das Volumen aus den Dukascopy-Daten bzw. live das Tick-Volumen von MT5 –
@@ -282,14 +292,18 @@ EMA, VWAP und ATR schreiben wir selbst (wenige Zeilen, voll getestet).
 
 1. **Entwickeln auf 2004–2018:** alle 40 EMA/VWAP-Kombinationen durchrechnen,
    Rangliste wie im Video.
-2. **Auswahl:** die beste Kombination – und zusätzlich prüfen, ob
-   ihre **Nachbarn** (z. B. EMA 15/25 statt 20) ähnlich gut sind. Ein einzelner
+2. **Auswahl** in der Reihenfolge aus 3.11: die beste Kombination – und
+   zusätzlich prüfen, ob ihre **Nachbarn** (z. B. EMA 15/25 statt 20, extra
+   gerechnet) ähnlich gut sind. Ein einzelner
    Glückstreffer zwischen schlechten Nachbarn wird verworfen.
 3. **Einmalige Prüfung auf 2019–heute** mit genau diesen Einstellungen, ohne
    danach nachzubessern. Erst das ist ein echtes Ergebnis.
-4. **Walk-Forward** zusätzlich: jedes Jahr mit den Jahren davor eingestellt.
+4. **Walk-Forward** zusätzlich, nur als Kontrolle: jedes Jahr mit den Jahren
+   davor eingestellt. Zeigt, ob die Auswahl über die Zeit stabil gewesen
+   wäre; ändert die gewählte Einstellung nicht.
 
-Immer eingerechnet: Spread, Kommission (falls der Broker eine hat), Slippage.
+Immer eingerechnet: Spread, Kommission (falls der Broker eine hat), Slippage,
+Swap für Übernacht-Positionen.
 
 Kennzahlen: Gewinn %, größter Rückgang, Anzahl Trades, Trefferquote, Ø R pro
 Trade, längste Verlustserie, Ergebnis pro Jahr, Anteil der Kosten.
@@ -307,9 +321,13 @@ Ergebnis: Bericht mit Kurve, Rangliste und Jahrestabelle, bevor etwas live geht.
 
 **Start (Phase 4–5): MacBook**
 - MT5 Mac-App mit Demokonto, Gold-Chart, RustBridge + Anzeige-Indikator
-- Rust-Programm im Terminal; der Mac darf während der Handelszeit nicht
-  schlafen (z. B. App „Amphetamine“)
-- Handelszeit: London + New York, ca. 08:00–22:00 deutsche Zeit
+- Rust-Programm im Terminal. Weil die Strategie **rund um die Uhr** handelt,
+  muss auch das MacBook **Mo–Fr durchgehend** laufen, eingesteckt und ohne
+  Ruhezustand (z. B. App „Amphetamine“, Deckel offen oder externer Bildschirm).
+- Ist das MacBook zwischendurch aus: offene Positionen bleiben durch Stop und
+  Ziel beim Broker geschützt, aber Signale, Gegensignale und die
+  Freitags-Schließung fallen aus – die Demo-Ergebnisse weichen dann vom
+  Backtest ab. Das steht im Tagesbericht, damit wir es beim Vergleich wissen.
 
 **Dauerbetrieb (Phase 6): eigener Mac mini als Server**
 - Läuft durchgehend (Gold handelt Mo–Fr fast rund um die Uhr), gleiche
@@ -320,8 +338,7 @@ Ergebnis: Bericht mit Kurve, Rangliste und Jahrestabelle, bevor etwas live geht.
 - Ruhezustand aus, Bildschirm darf aus
 - Fernzugriff vom MacBook/iPhone: Bildschirmfreigabe bzw. SSH, um nachzusehen
   oder den Not-Aus auszulösen
-- Wächter: Kommen 10 Minuten keine Kurse von MT5 an, schreibt der Bot eine
-  Warnung in den Bericht (später auch aufs Handy)
+- Wächter wie in 3.4 (2 Min ohne Kurse → keine Einstiege, 10 Min → Warnung)
 
 **Berichte**
 - Abends werden Tagebuch + Tagesbericht automatisch in dein GitHub-Repo
@@ -339,7 +356,7 @@ Ergebnis: Bericht mit Kurve, Rangliste und Jahrestabelle, bevor etwas live geht.
 | 2 | Auswertung | Bericht + Go/No-Go | deine Entscheidung |
 | 3 | MQL5-Brücke, Anzeige-Indikator, Live-Teil in Rust, Tagebuch-Upload | Ablauf-Test mit simulierter Brücke grün | – |
 | 4 | Einrichtung auf deinem Mac (Anleitung Schritt für Schritt) | Selbsttest grün, Test-Order 0,01 Lot auf Demo klappt | MT5 Mac-App, Demokonto, ca. 30–60 Min |
-| 5 | Demo-Betrieb | 4 Wochen, Tagesberichte, Vergleich mit Backtest | Mac zur Handelszeit an |
+| 5 | Demo-Betrieb | 4 Wochen, Tagesberichte, Vergleich mit Backtest | MacBook Mo–Fr durchgehend an (oder gleich Mac mini) |
 | 6 | Mac mini als Dauer-Server | Bot läuft Mo–Fr durchgehend, startet nach Neustart/Stromausfall selbst, Handy-Benachrichtigungen | Mac mini kaufen, ca. 30 Min Einrichtung mit Anleitung |
 
 ## 10. Grenzen und Risiken
