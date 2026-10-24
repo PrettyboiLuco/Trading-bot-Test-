@@ -76,6 +76,10 @@ vergleicht; der Rest ist fest.
 - Beide werden sofort mit der Order an MT5 übergeben.
 - Springt der Kurs über den Stop (z. B. nach einer Pause), wird zum ersten
   verfügbaren Kurs geschlossen – im Backtest genauso.
+- Backtest: Werden Stop und Ziel in derselben 1-Minuten-Kerze berührt, zählt
+  der **Stop** (vorsichtige Annahme); für 2023–heute entscheiden die Ticks.
+- Live: Lehnt MT5 eine Order ab (z. B. Requote), versucht der Bot es einmal
+  sofort neu; klappt es nicht, wird das Signal ausgelassen und protokolliert.
 
 ### 3.6 Position und Gegensignal
 - Höchstens **eine** Position gleichzeitig. Neues Kreuz in dieselbe Richtung: ignorieren.
@@ -104,6 +108,10 @@ vergleicht; der Rest ist fest.
 - 40 Kombinationen: EMA 9/20/50/100/200 × Tages-/Wochen-VWAP × 5/15/30/60 Min
 - Nachrichten-Filter an/aus (15 Min vor/nach wichtigen US-Daten)
 - Kosten: Spread aus den Daten, Kommission und Swap einstellbar
+
+Broker-Werte, die erst mit deinem Demokonto feststehen (Phase 4) und nur
+eingetragen, nicht entschieden werden: Symbolname, Kontraktgröße, Mindest-Lot
+und Lot-Schritt, Serverzeit, Zeiten der täglichen Pause, Swap-Sätze, Kommission.
 
 Ergebnis des Backtests: **eine** feste Einstellung für jeden V-Punkt. Danach
 ist die Strategie zu 100 % festgelegt und wird live nicht mehr verändert,
