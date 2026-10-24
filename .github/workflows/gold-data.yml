@@ -1,0 +1,96 @@
+# Downloads XAU/USD (gold) candles from Dukascopy's free history (from June
+# 1999) one year at a time and publishes them as assets of the GitHub release
+# "data-xauusd-<timeframe>", so the repository itself stays small.
+# Start it by hand: Actions > Gold-Daten > Run workflow.
+name: Gold-Daten
+
+on:
+  workflow_dispatch:
+    inputs:
+      timeframe:
+        description: "Candle size: m5 (default), m1, m15, h1"
+        default: "m5"
+      from_year:
+        description: "First year (Dukascopy has gold from 1999)"
+        default: "1999"
+      to_year:
+        description: "Last year (empty = this year)"
+        default: ""
+      price_type:
+        description: "bid or ask"
+        default: "bid"
+
+permissions:
+  contents: write
+
+jobs:
+  years:
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.y.outputs.list }}
+    steps:
+      - id: y
+        run: |
+          last="${{ inputs.to_year }}"; [ -z "$last" ] && last=$(date -u +%Y)
+          echo "list=$(seq "${{ inputs.from_year }}" "$last" | jq -cRs 'split("\n") | map(select(length > 0))')" >> "$GITHUB_OUTPUT"
+
+  download:
+    needs: years
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        year: ${{ fromJson(needs.years.outputs.list) }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Download ${{ matrix.year }}
+        run: |
+          y=${{ matrix.year }}
+          to=$(( y + 1 ))-01-01
+          [ "$y" = "$(date -u +%Y)" ] && to=now
+          npx --yes dukascopy-node@1.51.0 -i xauusd -from "$y-01-01" -to "$to" \
+            -t "${{ inputs.timeframe }}" -p "${{ inputs.price_type }}" -v -f csv \
+            -dir out -r 5 -rp 2000 -re -bs 5 -bp 1500 -s \
+            --chrome-path "$(command -v google-chrome || command -v chromium || true)"
+          f=$(ls out/*.csv | head -1)
+          name="xauusd-${{ inputs.timeframe }}-${{ inputs.price_type }}-$y.csv"
+          mv "$f" "$name"
+          echo "$name: $(( $(wc -l < "$name") - 1 )) candles, first/last:"
+          sed -n 2p "$name"; tail -1 "$name"
+          gzip -9 "$name"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: year-${{ matrix.year }}
+          path: "*.csv.gz"
+          retention-days: 3
+
+  publish:
+    needs: download
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: year-*
+          merge-multiple: true
+          path: files
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="data-xauusd-${{ inputs.timeframe }}"
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "Gold (XAU/USD) ${{ inputs.timeframe }} candles" \
+            --notes "Dukascopy XAU/USD candles, one gzip CSV per year (timestamp in ms UTC, open, high, low, close, volume). Made by the Gold-Daten workflow." --latest=false
+          gh release upload "$tag" files/*.csv.gz --clobber
+          ls -la files
+          echo "### Gold-Daten" >> "$GITHUB_STEP_SUMMARY"
+          echo "Release: https://github.com/${{ github.repository }}/releases/tag/$tag" >> "$GITHUB_STEP_SUMMARY"
+          ls files >> "$GITHUB_STEP_SUMMARY"
