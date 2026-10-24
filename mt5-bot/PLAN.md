@@ -27,9 +27,23 @@ MacBook
      └─ Protokoll       Log, Trade-Tagebuch (CSV), Tagesbericht
 ```
 
+**Rust steuert das komplette System.** Jede Entscheidung fällt in Rust:
+Daten auswerten, Signal, Lotgröße, Limits, Einstieg, Ausstieg, Not-Aus,
+Abgleich nach Neustart. Die MQL5-Brücke enthält **keine Handelslogik**; sie ist
+nur der Bote, der Kurse an Rust schickt und Rusts Befehle 1:1 an MT5 weitergibt,
+weil MT5 Orders nur aus dem Terminal heraus annimmt. Das ganze System ist Rust;
+einzige Ausnahme ist das einmalige Laden der Gold-Daten (Werkzeug in Node.js,
+läuft nur auf GitHub).
+
 Grundsatz wie bei barter-rs: **Backtest und Live laufen durch denselben Code**,
 nur die Ausführung wird ausgetauscht. Was im Backtest funktioniert, ist genau
 das, was live läuft.
+
+Zur Geschwindigkeit: Rust reagiert in Mikrosekunden, die Strecke Rust → MT5 →
+Broker dauert Millisekunden. Bei 5-Minuten-Kerzen entscheidet das kaum über den
+Gewinn; der eigentliche Vorteil von Rust ist hier **Zuverlässigkeit**: strenge
+Typen für Preise, Lots und Zeiten fangen die Fehler ab, die beim Traden am
+meisten kosten.
 
 ## 3. Ordner und Bausteine
 
