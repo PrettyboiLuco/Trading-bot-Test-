@@ -56,9 +56,10 @@ Zusätzlich:
 - Optional, im Backtest geprüft: keine Einstiege 15 Min vor/nach wichtigen US-Daten
 - Magic Number 1001 für alle Trades dieser Strategie
 
-## 4. Risiko-Regeln (gemeinsam)
+## 4. Risiko-Regeln
 
-- **1 % des Kontos pro Trade**. Lotgröße = Risiko in $ / (Stop-Abstand × Kontraktgröße),
+- **1 % des Kontos pro Trade** (auf Demo frei wählbar; 1 % bleibt Standard,
+  damit die Demo-Ergebnisse dem entsprechen, was später realistisch wäre). Lotgröße = Risiko in $ / (Stop-Abstand × Kontraktgröße),
   abgerundet auf die Lot-Schrittweite des Brokers (Gold meist 100 oz pro Lot, 0,01 Lot).
   Wäre selbst 0,01 Lot zu groß, wird der Trade ausgelassen, nicht vergrößert.
 - **Tageslimit:** −3 % → keine neuen Trades bis zum nächsten Tag
@@ -158,14 +159,29 @@ Trade, längste Verlustserie, Ergebnis pro Jahr, Anteil der Kosten.
 
 Ergebnis: Bericht mit Kurve, Rangliste und Jahrestabelle, bevor etwas live geht.
 
-## 8. Betrieb auf deinem Mac
+## 8. Betrieb: MacBook zum Start, später Mac mini als Dauer-Server
 
+**Start (Phase 4–5): MacBook**
 - MT5 Mac-App mit Demokonto, Gold-Chart, RustBridge + Anzeige-Indikator
 - Rust-Programm im Terminal; der Mac darf während der Handelszeit nicht
   schlafen (z. B. App „Amphetamine“)
 - Handelszeit: London + New York, ca. 08:00–22:00 deutsche Zeit
-- Abends: Tagebuch + Tagesbericht werden automatisch in dein GitHub-Repo
-  hochgeladen (eigener Ordner, z. B. `mt5-bot/journal/`)
+
+**Dauerbetrieb (Phase 6): eigener Mac mini als Server**
+- Läuft durchgehend (Gold handelt Mo–Fr fast rund um die Uhr), gleiche
+  Software wie auf dem MacBook – kein Umbau nötig, kein gemieteter Server
+- Automatischer Start nach Stromausfall/Neustart: macOS „nach Stromausfall
+  automatisch starten“, automatische Anmeldung, MT5 und der Rust-Bot starten
+  von selbst (launchd-Dienst, der den Bot bei einem Absturz neu startet)
+- Ruhezustand aus, Bildschirm darf aus
+- Fernzugriff vom MacBook/iPhone: Bildschirmfreigabe bzw. SSH, um nachzusehen
+  oder den Not-Aus auszulösen
+- Wächter: Kommen 10 Minuten keine Kurse von MT5 an, schreibt der Bot eine
+  Warnung in den Bericht (später auch aufs Handy)
+
+**Berichte**
+- Abends werden Tagebuch + Tagesbericht automatisch in dein GitHub-Repo
+  hochgeladen (`mt5-bot/journal/`) – freigegeben
 - Ich lese die Berichte über GitHub, vergleiche die Live-Trades mit dem
   Backtest und schlage Verbesserungen als Pull Request vor. Updates holst du
   mit einem Befehl auf den Mac.
@@ -180,7 +196,7 @@ Ergebnis: Bericht mit Kurve, Rangliste und Jahrestabelle, bevor etwas live geht.
 | 3 | MQL5-Brücke, Anzeige-Indikator, Live-Teil in Rust, Tagebuch-Upload | Ablauf-Test mit simulierter Brücke grün | – |
 | 4 | Einrichtung auf deinem Mac (Anleitung Schritt für Schritt) | Selbsttest grün, Test-Order 0,01 Lot auf Demo klappt | MT5 Mac-App, Demokonto, ca. 30–60 Min |
 | 5 | Demo-Betrieb | 4 Wochen, Tagesberichte, Vergleich mit Backtest | Mac zur Handelszeit an |
-| 6 | Später | Server statt Mac, Handy-Benachrichtigungen | – |
+| 6 | Mac mini als Dauer-Server | Bot läuft Mo–Fr durchgehend, startet nach Neustart/Stromausfall selbst, Handy-Benachrichtigungen | Mac mini kaufen, ca. 30 Min Einrichtung mit Anleitung |
 
 ## 10. Grenzen und Risiken
 
@@ -213,7 +229,6 @@ sonst dient das Projekt als Vorlage und wir schreiben es selbst.
 | **EarnForex PositionSizer** (MQL5) | Referenz für korrekte Lotberechnung in MT5 (Tick-Wert, Kontraktgröße, Lot-Schritte) | Vorlage für Tests der Lotgröße |
 | **GOLD_ORB** (MQL5) | Gold-spezifische MT5-Details: Serverzeit, Lot-Rundung, Orders mit SL/TP | Vorlage für die Brücke |
 | **mtapi** (C#, MT4/5-Brücke) | bewährter Aufbau einer Terminal-Brücke (Befehle, Antworten, Fehler) | Vorlage für RustBridge |
-| **MetaTrader5-Docker** (MIT) | MT5 auf einem Linux-Server statt dem Mac | erst Phase 6 |
 | **Moon Dev / Harvard-Repo** | Vorgehen Research → Backtest → Implement, Leseliste | entspricht unserem Plan |
 
 Bewusst **nicht** übernommen: fertige Bots aus diesen Repos (Krypto, andere
@@ -221,8 +236,13 @@ Börsen, Optimierung über alle Daten ohne Prüfzeitraum) und Rust-MT5-Bibliothe
 (mt5-rs kann keine Orders senden, RustMT5 schickt Zugangsdaten an einen fremden
 Server).
 
-## 12. Offene Entscheidungen
+## 12. Entscheidungen
 
-1. Risiko 1 % pro Trade, Tageslimit −3 % auf Demo – einverstanden?
-2. Broker für das MT5-Demokonto (erst für Phase 4 nötig)
-3. Darf der Bot das Tagebuch automatisch in dein GitHub-Repo hochladen? (dafür richtest du in Phase 4 einmal einen Zugang ein)
+Getroffen:
+- Strategie: EMA kreuzt VWAP (Ausgangspunkt EMA 20 + Wochen-VWAP, 15 Min)
+- Risiko auf Demo: Standard 1 % pro Trade, Tageslimit −3 %
+- Tagebuch-Upload nach GitHub: ja
+- Dauerbetrieb: eigener Mac mini als Server
+
+Offen:
+- Broker für das MT5-Demokonto (erst für Phase 4 nötig)
