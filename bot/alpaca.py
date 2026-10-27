@@ -86,6 +86,8 @@ class Alpaca:
     def update_watchlist(self, watchlist_id, name, symbols):
         return self._call("PUT", "/v2/watchlists/" + watchlist_id, {"name": name, "symbols": symbols})
 
-    def close_all(self):
-        """Cancel every open order and flatten every position."""
-        return self._call("DELETE", "/v2/positions?cancel_orders=true")
+    def cancel_all_orders(self):
+        return self._call("DELETE", "/v2/orders")
+
+    def close_position(self, symbol):
+        return self._call("DELETE", "/v2/positions/" + symbol)

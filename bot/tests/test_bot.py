@@ -34,7 +34,8 @@ class FakeAlpaca:
         self.ts, self.is_open = ts, is_open
         self.equity, self.last_equity = equity, last_equity
         self.value = 2913.44
-        self.submitted, self.closed, self.held, self.orders, self.lists = [], 0, [], [], []
+        self.submitted, self.closed, self.held, self.orders, self.lists = [], [], [], [], []
+        self.cancelled, self.fail_close = 0, set()
 
     def clock(self):
         return {"timestamp": self.ts, "is_open": self.is_open, "next_open": "2026-10-20T09:30:00-04:00"}
@@ -68,9 +69,24 @@ class FakeAlpaca:
             if w["id"] == watchlist_id:
                 w.update(name=name, symbols=symbols)
 
-    def close_all(self):
-        self.closed += 1
-        return []
+    def hold_today(self, *symbols):
+        """Positions the bot opened today: held, with a filled order of its own."""
+        day = self.ts[:10]
+        for sym in symbols:
+            self.held.append(sym)
+            self.orders.append({"id": "o-" + sym, "client_order_id": "bot-%s-%s-1000" % (day, sym),
+                                "status": "filled", "qty": "1", "filled_qty": "1", "submitted_at": self.ts})
+
+    def cancel_all_orders(self):
+        self.cancelled += 1
+        self.orders = []
+
+    def close_position(self, symbol):
+        if symbol in self.fail_close:
+            self.fail_close.discard(symbol)  # fails once, like a bracket leg not yet cancelled
+            raise alpaca.AlpacaError("DELETE /v2/positions/%s -> 403 insufficient qty available" % symbol)
+        self.closed.append(symbol)
+        self.held = [s for s in self.held if s != symbol]
 
 
 class BotTest(unittest.TestCase):
@@ -78,6 +94,9 @@ class BotTest(unittest.TestCase):
         self.dir = tempfile.mkdtemp()
         self.cfg = bot.load_config(os.path.join(BOT, "config.example.json"))
         self.cfg["bot"]["symbols"] = ["TSLA"]
+        # the sizing tests below were written for these limits
+        self.cfg.update(budget=5000, max_position_pct=75, max_order_usd=4000, max_trades_per_day=3,
+                        max_daily_loss_usd=150)
         self.cfg["bot"]["replays"] = 500
         self.lines = []
 
@@ -201,12 +220,38 @@ class BotTest(unittest.TestCase):
         self.assertEqual(self.make(b, now="2026-10-19 09:50").tick(), "watching")
         self.assertEqual(b.submitted, [])
 
-    def test_flat_by_closes_everything_once(self):
+    def test_flat_by_closes_every_position(self):
         b = FakeAlpaca(ts="2026-10-19T15:56:00.0-04:00")
+        b.hold_today("META", "PLTR")
         bt = self.make(b)
         self.assertEqual(bt.tick(), "flat")
-        self.assertEqual(bt.tick(), "flat")
-        self.assertEqual(b.closed, 1)
+        self.assertEqual(sorted(b.closed), ["META", "PLTR"])
+        self.assertEqual(b.cancelled, 1)
+        bt.tick()
+        self.assertTrue(bt.flattened)
+        self.assertEqual(sorted(b.closed), ["META", "PLTR"])
+
+    def test_flat_by_retries_a_position_that_did_not_close(self):
+        # 23.10.2026: "closed all positions" was logged, yet positions were still open on Monday
+        b = FakeAlpaca(ts="2026-10-19T15:56:00.0-04:00")
+        b.hold_today("META", "PLTR")
+        b.fail_close = {"META"}
+        bt = self.make(b)
+        bt.tick()
+        self.assertEqual(b.held, ["META"])
+        self.assertFalse(bt.flattened)
+        self.assertTrue(any("closing META failed" in l for l in self.lines))
+        bt.tick()
+        self.assertEqual(b.held, [])
+        bt.tick()
+        self.assertTrue(bt.flattened)
+
+    def test_positions_left_from_an_earlier_day_are_closed(self):
+        b = FakeAlpaca(ts="2026-10-19T09:31:00.0-04:00")
+        b.held = ["META"]
+        self.make(b, now="2026-10-19 09:31").tick()
+        self.assertEqual(b.closed, ["META"])
+        self.assertTrue(any("left open from an earlier day" in l for l in self.lines))
 
     def test_daily_loss_limit_stops_entries(self):
         b = FakeAlpaca(equity=99800, last_equity=100000)
@@ -237,7 +282,8 @@ class BotTest(unittest.TestCase):
         # 22.10.2026: TSLA ($3,470) then AMD ($3,690) on a $5,000 budget.
         # With $4,000 already held only $1,000 of the budget is left.
         b = FakeAlpaca()
-        b.held, b.value = ["AMD"], 4000
+        b.hold_today("AMD")
+        b.value = 4000
         bt = self.make(b)
         bt.sync_account()
         self.assertEqual(bot.read_json(os.path.join(self.dir, "trader/portfolio.json"))["cash"], 1000)
@@ -247,7 +293,8 @@ class BotTest(unittest.TestCase):
 
     def test_budget_used_up_means_no_order(self):
         b = FakeAlpaca()
-        b.held, b.value = ["AMD"], 5200
+        b.hold_today("AMD")
+        b.value = 5200
         self.assertEqual(self.make(b).tick(), "watching")
         self.assertEqual(b.submitted, [])
 
