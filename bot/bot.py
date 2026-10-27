@@ -26,6 +26,8 @@ import subprocess
 import sys
 import time
 
+from alpaca import Alpaca, AlpacaError
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL = os.path.join(os.path.dirname(HERE), "day-trader-skill")
 TOOLS = {
@@ -223,6 +225,22 @@ class Bot:
         self.log("selftest: %s" % ("all ok" if not failed else "%d FAILED" % failed))
         return failed
 
+    def flatten(self, positions):
+        """Cancel every open order, then close each position on its own. A
+        single "close all" call can leave a position open while its bracket
+        legs are still being cancelled, so the caller checks again on the next
+        tick until no position is left."""
+        try:
+            self.broker.cancel_all_orders()
+        except AlpacaError as e:
+            self.log("cancel orders failed: %s" % e)
+        for p in positions:
+            try:
+                self.broker.close_position(p["symbol"])
+                self.log("closing %s %s shares" % (p["symbol"], p["qty"]))
+            except AlpacaError as e:
+                self.log("closing %s failed, will retry: %s" % (p["symbol"], e))
+
     # ---------------------------------------------------------------- the tick
 
     def tick(self):
@@ -238,11 +256,19 @@ class Bot:
         if day != self.day:
             self.new_day(day)
             self.sync_orders(clock)
+            today = {r["symbol"] for r in self.placed_today()}
+            left = [p for p in (self.broker.positions() or []) if p["symbol"] not in today]
+            if left:
+                self.log("positions left open from an earlier day: %s" % ", ".join(p["symbol"] for p in left))
+                self.flatten(left)
         if hm >= self.cfg.get("flat_by", "15:55"):
             if not self.flattened:
-                self.broker.close_all()
-                self.flattened = True
-                self.log("%s flat by %s: cancelled open orders and closed all positions" % (hm, self.cfg.get("flat_by", "15:55")))
+                positions = self.broker.positions() or []
+                if positions:
+                    self.flatten(positions)
+                else:
+                    self.flattened = True
+                    self.log("%s flat by %s: no open positions" % (hm, self.cfg.get("flat_by", "15:55")))
             return "flat"
         pnl, held = self.sync_account()
         if pnl <= -float(self.cfg.get("max_daily_loss_usd", 1e18)):
@@ -372,7 +398,6 @@ def main(argv=None):
     ap.add_argument("--max-hours", type=float, help="exit after this many hours")
     ap.add_argument("--selftest", action="store_true", help="check Alpaca and Yahoo, update the watchlist, no trading")
     a = ap.parse_args(argv)
-    from alpaca import Alpaca, AlpacaError
 
     cfg = load_config(a.config)
     logfile = os.path.join(HERE, "trader", "bot.log")

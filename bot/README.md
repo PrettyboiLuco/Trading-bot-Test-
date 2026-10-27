@@ -79,13 +79,13 @@ eigene `bot/config.json` anlegen (wird nicht committet).
 
 | Feld | Standard | Bedeutung |
 | --- | --- | --- |
-| `budget` | 5000 | So viel Geld darf der Bot insgesamt in Aktien halten, auch wenn das Papierkonto mehr hat |
+| `budget` | 25000 | So viel Geld darf der Bot insgesamt in Aktien halten, auch wenn das Papierkonto mehr hat. Pro Aktie höchstens `max_position_pct` (25 %) davon |
 | `max_loss_per_trade_usd` | 50 | Maximaler Verlust pro Trade, wenn der Stop greift |
-| `max_daily_loss_usd` | 150 | Danach keine neuen Trades an diesem Tag |
-| `max_trades_per_day` | 3 | Maximal so viele Käufe pro Tag |
+| `max_daily_loss_usd` | 300 | Danach keine neuen Trades an diesem Tag |
+| `max_trades_per_day` | 10 | Maximal so viele Käufe pro Tag |
 | `no_entries_before` / `after` | 09:45 / 15:30 | Zeitfenster für neue Trades (New York) |
 | `flat_by` | 15:55 | Ab dann wird alles geschlossen |
-| `bot.symbols` | TSLA, NVDA, … | Aktien, die beobachtet werden |
+| `bot.symbols` | 20 Werte: TSLA, NVDA, …, SPY, QQQ | Aktien und ETFs, die beobachtet werden |
 | `bot.scanner` | false | `true`: zusätzlich alle ~5.900 US-Aktien nach Ausbrüchen scannen (langsam) |
 | `bot.take_profit_usd` | 50 | Jeder Trade wird bei so viel Dollar Gewinn geschlossen (Take-Profit). `null` = stattdessen `bot.target` benutzen |
 | `bot.target` | 1R | Nur ohne `take_profit_usd`: Kursziel, 1R = gleich weit wie der Stop, 2R = doppelt so weit |
